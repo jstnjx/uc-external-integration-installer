@@ -35,10 +35,12 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,6 +146,112 @@ def forget_integration(integration_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Remotes: multi-remote registry with saved credentials
+# ---------------------------------------------------------------------------
+#
+# Each remote talks the Unfolded Circle Core-API. Registering an external
+# integration is POST /api/intg/drivers with the driver metadata and its
+# ws:// url, authenticated as web-configurator:<PIN> (HTTP Basic) or with an
+# API key (Bearer). Credentials are stored on disk — see the README security note.
+
+REMOTES_FILE = DATA_DIR / "remotes.json"
+_remotes_lock = threading.Lock()
+
+
+def load_remotes() -> dict[str, Any]:
+    if REMOTES_FILE.exists():
+        try:
+            return json.loads(REMOTES_FILE.read_text())
+        except Exception:
+            pass
+    return {"remotes": {}, "active": None}
+
+
+def save_remotes(data: dict[str, Any]) -> None:
+    tmp = REMOTES_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(REMOTES_FILE)
+    try:
+        os.chmod(REMOTES_FILE, 0o600)  # credentials live here
+    except OSError:
+        pass
+
+
+def _mask(remote: dict[str, Any]) -> dict[str, Any]:
+    """Public view of a remote — never leak the PIN or API key."""
+    return {
+        "id": remote["id"],
+        "name": remote.get("name"),
+        "scheme": remote.get("scheme", "http"),
+        "host": remote.get("host"),
+        "port": remote.get("port"),
+        "username": remote.get("username", "web-configurator"),
+        "has_pin": bool(remote.get("pin")),
+        "has_api_key": bool(remote.get("api_key")),
+        "verify_tls": remote.get("verify_tls", False),
+        "advertise_ip": remote.get("advertise_ip", ""),
+    }
+
+
+def parse_address(addr: str) -> tuple[str, str, int]:
+    addr = (addr or "").strip()
+    if not re.match(r"^https?://", addr):
+        addr = "http://" + addr
+    u = urllib.parse.urlparse(addr)
+    scheme = u.scheme or "http"
+    host = u.hostname or ""
+    port = u.port or (443 if scheme == "https" else 80)
+    return scheme, host, port
+
+
+def detect_host_ip(target_host: str) -> str | None:
+    """Local IP on the interface that routes to the remote (for driver_url)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1.0)
+        s.connect((target_host, 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
+
+
+def remote_request(remote: dict[str, Any], method: str, path: str,
+                   json_body: Any = None, timeout: float = 15.0) -> httpx.Response:
+    base = f"{remote.get('scheme', 'http')}://{remote['host']}:{remote['port']}/api"
+    headers = {}
+    auth = None
+    if remote.get("api_key"):
+        headers["Authorization"] = f"Bearer {remote['api_key']}"
+    else:
+        auth = httpx.BasicAuth(
+            remote.get("username") or "web-configurator", remote.get("pin", "")
+        )
+    return httpx.request(
+        method, base + path, json=json_body, auth=auth, headers=headers,
+        timeout=timeout, verify=remote.get("verify_tls", False),
+    )
+
+
+def build_driver_payload(entry: dict[str, Any], rec: dict[str, Any],
+                         advertise_ip: str, port: int) -> dict[str, Any]:
+    driver_id = (entry.get("driver_id") or rec.get("id") or entry.get("id"))
+    name = entry.get("name") or rec.get("name") or driver_id
+    payload: dict[str, Any] = {
+        "driver_id": driver_id,
+        "name": {"en": name},
+        "version": entry.get("version") or "1.0.0",
+        "driver_url": f"ws://{advertise_ip}:{port}",
+    }
+    if entry.get("description"):
+        payload["description"] = {"en": entry["description"]}
+    if entry.get("author"):
+        payload["developer"] = {"name": entry["author"]}
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # Registry client
 # ---------------------------------------------------------------------------
 
@@ -178,10 +286,61 @@ def find_integration(integration_id: str) -> dict[str, Any] | None:
     return None
 
 
+# The registry is served from a GitHub repo; show which commit of that repo we're
+# looking at. Resolved from the raw URL and cached; refreshed in the background so
+# it never adds latency to /api/health (which gets pinged during self-updates).
+_reg_commit = {"sha": None, "ts": 0.0, "refreshing": False}
+_reg_commit_lock = threading.Lock()
+
+
+def _registry_repo_ref() -> tuple[str, str, str] | None:
+    m = re.match(r"https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(.+)", REGISTRY_URL)
+    if not m:
+        return None
+    owner, repo, rest = m.group(1), m.group(2), m.group(3)
+    parts = rest.split("/")
+    branch = parts[2] if parts[:2] == ["refs", "heads"] and len(parts) > 2 else parts[0]
+    return owner, repo, branch
+
+
+def _refresh_registry_commit() -> None:
+    try:
+        ref = _registry_repo_ref()
+        if ref:
+            owner, repo, branch = ref
+            resp = httpx.get(
+                f"https://api.github.com/repos/{owner}/{repo}/commits/{branch}",
+                headers={"User-Agent": "uc-external-integration-installer",
+                         "Accept": "application/vnd.github+json"},
+                timeout=10.0, follow_redirects=True,
+            )
+            resp.raise_for_status()
+            _reg_commit["sha"] = resp.json()["sha"][:7]
+    except Exception:
+        pass  # keep last known value
+    finally:
+        _reg_commit["ts"] = time.time()
+        _reg_commit["refreshing"] = False
+
+
+def registry_commit() -> str | None:
+    """Return the cached registry-repo commit; kick off an async refresh if stale."""
+    with _reg_commit_lock:
+        stale = time.time() - _reg_commit["ts"] > 900
+        if stale and not _reg_commit["refreshing"]:
+            _reg_commit["refreshing"] = True
+            threading.Thread(target=_refresh_registry_commit, daemon=True).start()
+    return _reg_commit["sha"]
+
+
 PLACEHOLDER_REPO = "https://github.com/unfoldedcircle/"
 
 
 def is_installable(entry: dict[str, Any]) -> bool:
+    # Official (first-party) integrations are meant to run on the remote itself,
+    # not as external containers — never installable here.
+    if entry.get("official"):
+        return False
     repo = (entry.get("repository") or "").strip()
     return bool(repo) and repo != PLACEHOLDER_REPO and repo.startswith("http")
 
@@ -684,6 +843,25 @@ class ConfigBody(BaseModel):
     env: dict[str, str] = {}
 
 
+class RemoteBody(BaseModel):
+    name: str
+    address: str                      # host, host:port, or full http(s):// url
+    username: str | None = "web-configurator"
+    pin: str | None = None
+    api_key: str | None = None
+    verify_tls: bool = False
+    advertise_ip: str | None = None
+
+
+class RegisterBody(BaseModel):
+    integration_id: str
+    advertise_ip: str | None = None
+
+
+class ActiveRemoteBody(BaseModel):
+    id: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -726,6 +904,7 @@ def health() -> dict[str, Any]:
         "port_start": PORT_START,
         "data_dir": str(DATA_DIR),
         "build": current_commit().get("short"),
+        "registry_commit": registry_commit(),
     }
 
 
@@ -917,6 +1096,157 @@ def api_logs(integration_id: str, tail: int = 300):
     return {"logs": logs}
 
 
+# ---- remotes ---------------------------------------------------------------
+
+
+def _get_remote_or_404(rid: str) -> dict[str, Any]:
+    remote = load_remotes()["remotes"].get(rid)
+    if remote is None:
+        raise HTTPException(404, "Unknown remote")
+    return remote
+
+
+@app.get("/api/remotes", dependencies=[Depends(require_token)])
+def api_remotes_list() -> dict[str, Any]:
+    data = load_remotes()
+    return {
+        "remotes": [_mask(r) for r in data["remotes"].values()],
+        "active": data.get("active"),
+    }
+
+
+@app.post("/api/remotes", dependencies=[Depends(require_token)])
+def api_remotes_create(body: RemoteBody) -> dict[str, Any]:
+    scheme, host, port = parse_address(body.address)
+    if not host:
+        raise HTTPException(400, "Could not parse the remote address")
+    rid = uuid.uuid4().hex[:8]
+    remote = {
+        "id": rid, "name": body.name, "scheme": scheme, "host": host, "port": port,
+        "username": body.username or "web-configurator",
+        "pin": body.pin or "", "api_key": body.api_key or "",
+        "verify_tls": body.verify_tls, "advertise_ip": body.advertise_ip or "",
+    }
+    with _remotes_lock:
+        data = load_remotes()
+        data["remotes"][rid] = remote
+        if not data.get("active"):
+            data["active"] = rid
+        save_remotes(data)
+    return _mask(remote)
+
+
+@app.put("/api/remotes/{rid}", dependencies=[Depends(require_token)])
+def api_remotes_update(rid: str, body: RemoteBody) -> dict[str, Any]:
+    with _remotes_lock:
+        data = load_remotes()
+        remote = data["remotes"].get(rid)
+        if remote is None:
+            raise HTTPException(404, "Unknown remote")
+        scheme, host, port = parse_address(body.address)
+        remote.update({
+            "name": body.name, "scheme": scheme, "host": host, "port": port,
+            "username": body.username or "web-configurator",
+            "verify_tls": body.verify_tls, "advertise_ip": body.advertise_ip or "",
+        })
+        # only overwrite secrets when a new value is supplied
+        if body.pin:
+            remote["pin"] = body.pin
+        if body.api_key is not None:
+            remote["api_key"] = body.api_key
+        save_remotes(data)
+        return _mask(remote)
+
+
+@app.delete("/api/remotes/{rid}", dependencies=[Depends(require_token)])
+def api_remotes_delete(rid: str) -> dict[str, str]:
+    with _remotes_lock:
+        data = load_remotes()
+        data["remotes"].pop(rid, None)
+        if data.get("active") == rid:
+            data["active"] = next(iter(data["remotes"]), None)
+        save_remotes(data)
+    return {"status": "removed"}
+
+
+@app.post("/api/remotes/active", dependencies=[Depends(require_token)])
+def api_remotes_active(body: ActiveRemoteBody) -> dict[str, Any]:
+    with _remotes_lock:
+        data = load_remotes()
+        if body.id and body.id not in data["remotes"]:
+            raise HTTPException(404, "Unknown remote")
+        data["active"] = body.id
+        save_remotes(data)
+    return {"active": body.id}
+
+
+@app.post("/api/remotes/{rid}/test", dependencies=[Depends(require_token)])
+def api_remotes_test(rid: str) -> dict[str, Any]:
+    remote = _get_remote_or_404(rid)
+    try:
+        r = remote_request(remote, "GET", "/intg/drivers", timeout=10.0)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Could not reach remote: {exc}")
+    if r.status_code == 401:
+        raise HTTPException(401, "Authentication failed — check the PIN or API key")
+    if r.status_code >= 400:
+        raise HTTPException(502, f"Remote returned {r.status_code}")
+    drivers = r.json() if r.headers.get("content-type", "").startswith("application/json") else []
+    return {"ok": True, "driver_count": len(drivers) if isinstance(drivers, list) else None}
+
+
+@app.get("/api/remotes/{rid}/drivers", dependencies=[Depends(require_token)])
+def api_remotes_drivers(rid: str) -> Any:
+    remote = _get_remote_or_404(rid)
+    try:
+        r = remote_request(remote, "GET", "/intg/drivers", timeout=10.0)
+        r.raise_for_status()
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Remote error: {exc}")
+
+
+@app.post("/api/remotes/{rid}/register", dependencies=[Depends(require_token)])
+def api_remotes_register(rid: str, body: RegisterBody) -> dict[str, Any]:
+    remote = _get_remote_or_404(rid)
+    rec = load_state()["integrations"].get(body.integration_id)
+    if rec is None:
+        raise HTTPException(404, "Integration is not installed")
+    entry = find_integration(body.integration_id) or {}
+    port = int(rec.get("port"))
+    advertise = body.advertise_ip or remote.get("advertise_ip") or detect_host_ip(remote["host"])
+    if not advertise:
+        raise HTTPException(
+            400, "Could not determine this host's IP — set an advertise IP on the remote"
+        )
+    payload = build_driver_payload(entry, rec, advertise, port)
+    try:
+        r = remote_request(remote, "POST", "/intg/drivers", json_body=payload, timeout=20.0)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Could not reach remote: {exc}")
+    if r.status_code in (200, 201):
+        return {"ok": True, "driver_id": payload["driver_id"], "driver_url": payload["driver_url"]}
+    if r.status_code == 401:
+        raise HTTPException(401, "Authentication failed — check the PIN or API key")
+    if r.status_code == 409:
+        raise HTTPException(409, f"Driver '{payload['driver_id']}' is already registered on this remote")
+    raise HTTPException(502, f"Remote returned {r.status_code}: {r.text[:300]}")
+
+
+@app.delete("/api/remotes/{rid}/drivers/{driver_id}", dependencies=[Depends(require_token)])
+def api_remotes_unregister(rid: str, driver_id: str) -> dict[str, str]:
+    remote = _get_remote_or_404(rid)
+    try:
+        r = remote_request(remote, "DELETE", f"/intg/drivers/{driver_id}", timeout=15.0)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Could not reach remote: {exc}")
+    if r.status_code in (200, 204):
+        return {"status": "unregistered", "driver_id": driver_id}
+    raise HTTPException(502, f"Remote returned {r.status_code}")
+
+
 # ---- static frontend -------------------------------------------------------
 
 if STATIC_DIR.exists():
@@ -934,6 +1264,8 @@ def index():
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
+
+registry_commit()  # warm the registry-commit cache in the background
 
 if __name__ == "__main__":
     import uvicorn

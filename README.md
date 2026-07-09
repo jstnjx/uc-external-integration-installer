@@ -20,11 +20,11 @@ network — exactly the model the shell script used, but manageable and re-entra
 ## Quick start (systemd)
 
 ```bash
-cd uc-external-integration-installer
-./install.sh            # sets up a venv + systemd service in /opt
+git clone https://github.com/jstnjx/uc-external-integration-installer.git && cd uc-external-integration-installer && chmod +x install.sh && sudo ./install.sh
 ```
 
-Then open `http://<host-ip>:8900`.
+This clones the repo, builds a virtualenv, installs the systemd service, and
+starts it. Then open `http://<host-ip>:8900`.
 
 ## Run manually (no systemd)
 
@@ -69,6 +69,26 @@ first update attaches the repository in place. You can also update from the API
 If the service isn't running under systemd (e.g. launched by hand), the update is
 applied but you restart the process yourself; the UI tells you so.
 
+## Registering with a remote
+
+The installer can register an installed integration directly with one or more UC
+remotes over the Core-API, so you don't have to rely on mDNS discovery.
+
+Add remotes from the ⚙ button next to the remote selector in the header. Each
+remote needs its address (IP or hostname) and the **web-configurator PIN** (used as
+HTTP Basic `web-configurator:PIN`); an API key can be used instead. Use **Test** to
+verify the connection, then pick the active remote from the header dropdown.
+
+On any installed integration, **Register** posts its driver to the active remote
+(`POST /api/intg/drivers`) with `driver_url = ws://<this-host>:<port>`. The host IP
+is auto-detected toward the remote, or you can set an explicit advertise IP per
+remote. The integration should be running so the remote can connect to it. The
+**Drivers** button on a remote lists what's registered and lets you unregister.
+
+Remote credentials are saved in `UC_INSTALLER_DATA/remotes.json` (file mode `600`,
+plaintext). Keep the data directory private; prefer a per-remote PIN/API key you
+can revoke over reusing sensitive credentials.
+
 ## Security
 
 This service controls Docker, which is effectively root on the host. **No token is
@@ -111,6 +131,9 @@ uc-external-integration-installer/
 `POST /api/integrations/{id}/{start|stop|restart}` ·
 `DELETE /api/integrations/{id}?purge=bool` ·
 `GET /api/integrations/{id}/logs?tail=N` · `GET /api/jobs/{job_id}` ·
-`GET /api/update/status` · `POST /api/update/apply`
+`GET /api/update/status` · `POST /api/update/apply` ·
+`GET/POST /api/remotes` · `PUT/DELETE /api/remotes/{id}` ·
+`POST /api/remotes/{id}/test` · `POST /api/remotes/{id}/register` ·
+`GET /api/remotes/{id}/drivers` · `DELETE /api/remotes/{id}/drivers/{driver_id}`
 
 If a token is configured, send `Authorization: Bearer <token>`.

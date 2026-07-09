@@ -154,6 +154,26 @@
   .updbtn.available { color: var(--amber); border-color: var(--amber-dim); }
   .updbtn.available .led { background: var(--amber); box-shadow: 0 0 8px 1px rgba(242,163,60,.7); }
 
+  .remote-picker { display: flex; align-items: center; gap: 4px; }
+  .remote-picker select { background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 7px; padding: 5px 8px; font-size: 12.5px; font-family: var(--mono); cursor: pointer; max-width: 180px; }
+  .btn-icon { appearance: none; background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 7px; width: 30px; height: 30px; cursor: pointer; font-size: 14px; line-height: 1; }
+  .btn-icon:hover { color: var(--text); border-color: var(--muted-2); }
+
+  .rem-row { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--panel-2); margin-bottom: 10px; flex-wrap: wrap; }
+  .rem-row.active { border-color: var(--amber-dim); }
+  .rem-row .rem-name { font-weight: 600; }
+  .rem-row .rem-addr { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .rem-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  .active-tag { font-family: var(--mono); font-size: 10.5px; color: var(--amber); border: 1px solid var(--amber-dim);
+    border-radius: 5px; padding: 2px 6px; }
+  .drivers-list { width: 100%; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .driver-item { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px;
+    color: var(--muted); padding: 3px 0; }
+  .checkline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+
   .empty { text-align: center; color: var(--muted); padding: 60px 20px; }
   .empty h3 { color: var(--text); font-weight: 620; margin: 0 0 6px; }
 
@@ -236,6 +256,10 @@
       <div class="stat"><span class="led" id="ledReg"></span> <span id="regInfo">registry</span></div>
       <button class="stat updbtn" id="updBtn" onclick="openUpdate()" title="Updates">
         <span class="led" id="ledUpd"></span> <span id="updInfo">build …</span></button>
+      <div class="remote-picker">
+        <select id="remoteSelect" onchange="setActiveRemote(this.value)" title="Active remote"></select>
+        <button class="btn-icon" onclick="openRemotes()" title="Manage remotes">⚙</button>
+      </div>
       <div class="stat" id="lockStat" style="display:none"><span class="led warn"></span> locked</div>
     </div>
   </div>
@@ -308,6 +332,37 @@
     </header>
     <div class="body"><div class="console" id="jobConsole"></div></div>
     <div class="foot"><button class="btn btn-primary" id="jobDone" style="display:none" onclick="closeJob()">Done</button></div>
+  </div>
+</div>
+
+<!-- REMOTES MODAL -->
+<div class="modal-back" id="remBack">
+  <div class="modal">
+    <header>
+      <h2>Remotes</h2><span class="sub">register integrations to your UC remotes</span>
+      <button class="x" onclick="closeModal('remBack')">×</button>
+    </header>
+    <div class="body">
+      <div id="remList"></div>
+
+      <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+        <h2 style="font-size:14px;margin:0 0 12px" id="remFormTitle">Add a remote</h2>
+        <input type="hidden" id="remEditId" value="" />
+        <div class="field"><label>Name</label><input id="remName" placeholder="Living room remote" /></div>
+        <div class="field"><label>Address</label><input id="remAddr" class="mono" placeholder="192.168.1.50  (or http://host:port)" />
+          <div class="hint">The remote's IP or hostname. Port defaults to 80.</div></div>
+        <div class="field"><label>Web-configurator PIN</label><input id="remPin" type="password" class="mono" placeholder="PIN" />
+          <div class="hint">Set in the remote's web configurator. Used as HTTP Basic auth (web-configurator:PIN). Leave blank when editing to keep the saved PIN.</div></div>
+        <div class="field"><label>API key (optional, overrides PIN)</label><input id="remApiKey" type="password" class="mono" placeholder="Bearer API key" /></div>
+        <div class="field"><label>Advertise IP (optional)</label><input id="remAdv" class="mono" placeholder="auto-detected" />
+          <div class="hint">This host's IP as the remote should reach it. Auto-detected if blank.</div></div>
+        <label class="checkline"><input type="checkbox" id="remTls" /> Use HTTPS / verify TLS</label>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="btn btn-line" id="remCancelEdit" style="display:none" onclick="resetRemoteForm()">Cancel edit</button>
+      <button class="btn btn-primary" id="remSaveBtn" onclick="saveRemote()">Add remote</button>
+    </div>
   </div>
 </div>
 
@@ -387,7 +442,8 @@ async function loadHealth() {
     const h = await (await fetch('/api/health')).json();
     $('ledDocker').className = 'led ' + (h.docker ? 'on' : 'err');
     $('ledReg').className = 'led ' + (h.registry_ok ? 'on' : 'err');
-    $('regInfo').textContent = h.registry_ok ? ('registry v' + (h.registry_version || '?')) : 'registry down';
+    const rc = h.registry_commit ? (' · ' + h.registry_commit) : '';
+    $('regInfo').textContent = h.registry_ok ? ('registry v' + (h.registry_version || '?') + rc) : 'registry down';
     if (h.token_required) { $('lockStat').style.display = 'flex'; if (!token()) $('lockbar').classList.add('show'); }
     $('brandSub').textContent = 'external integrations · port ' + h.port_start + '+';
     return h;
@@ -432,7 +488,8 @@ function renderBrowse() {
     else badges.push('<span class="badge">' + (it.custom ? 'community' : 'custom') + '</span>');
     const chips = (it.features || []).slice(0, 4).map(f => '<span class="chip">' + esc(f) + '</span>').join('');
     let action;
-    if (!it.installable) action = '<span class="hint" style="margin:0">Bundled first-party — not installable here</span>';
+    if (!it.installable) action = '<span class="hint" style="margin:0">' +
+      (it.official ? 'Official — runs on the remote, not here' : 'Bundled first-party — not installable here') + '</span>';
     else if (isInstalled) action = '<button class="btn btn-line btn-sm" onclick="switchTab(\'installed\')">Manage</button>';
     else action = '<button class="btn btn-primary btn-sm" onclick="openInstall(\'' + it.id + '\')">Install</button>';
     card.innerHTML =
@@ -494,6 +551,7 @@ function renderInstalled() {
       '<div class="row-actions">' + toggle +
         '<button class="btn btn-line btn-sm" onclick="lifecycle(\'' + it.id + '\',\'restart\')">Restart</button>' +
         '<button class="btn btn-line btn-sm" onclick="openLogs(\'' + it.id + '\')">Logs</button>' +
+        '<button class="btn btn-line btn-sm" onclick="registerIntegration(\'' + it.id + '\')" title="Register on the active remote">Register</button>' +
         '<button class="btn btn-line btn-sm" onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
         '<button class="btn btn-line btn-sm" onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
         '<button class="btn btn-danger btn-sm" onclick="removeIntegration(\'' + it.id + '\')">Remove</button>' +
@@ -720,6 +778,136 @@ function awaitRestart() {
   setTimeout(ping, 2500);
 }
 
+// ---- remotes ----
+let REMOTES = { remotes: [], active: null };
+
+async function loadRemotes() {
+  try {
+    REMOTES = await api('/api/remotes');
+    renderRemoteSelector();
+    if ($('remBack').classList.contains('show')) renderRemoteList();
+  } catch (e) { /* token gate */ }
+}
+function activeRemote() { return (REMOTES.remotes || []).find(r => r.id === REMOTES.active) || null; }
+function renderRemoteSelector() {
+  const sel = $('remoteSelect');
+  const list = REMOTES.remotes || [];
+  if (!list.length) { sel.innerHTML = '<option value="">No remotes</option>'; return; }
+  sel.innerHTML = list.map(r => '<option value="' + r.id + '"' + (r.id === REMOTES.active ? ' selected' : '') +
+    '>' + esc(r.name) + '</option>').join('');
+}
+async function setActiveRemote(id) {
+  try { await api('/api/remotes/active', { method: 'POST', body: JSON.stringify({ id: id || null }) });
+    REMOTES.active = id || null;
+  } catch (e) { toast(e.message, 'bad'); }
+}
+function openRemotes() { $('remBack').classList.add('show'); resetRemoteForm(); loadRemotes(); }
+function renderRemoteList() {
+  const box = $('remList');
+  const list = REMOTES.remotes || [];
+  if (!list.length) { box.innerHTML = '<p class="hint" style="margin:0 0 4px">No remotes yet. Add one below.</p>'; return; }
+  box.innerHTML = list.map(r => {
+    const active = r.id === REMOTES.active;
+    return '<div class="rem-row' + (active ? ' active' : '') + '" id="rem-' + r.id + '">' +
+      '<div><div class="rem-name">' + esc(r.name) + (active ? ' <span class="active-tag">active</span>' : '') + '</div>' +
+        '<div class="rem-addr">' + esc(r.scheme + '://' + r.host + ':' + r.port) +
+          (r.has_api_key ? ' · api key' : (r.has_pin ? ' · pin' : ' · no auth')) + '</div></div>' +
+      '<div class="rem-actions">' +
+        (active ? '' : '<button class="btn btn-line btn-sm" onclick="setActiveRemote(\'' + r.id + '\').then(loadRemotes)">Set active</button>') +
+        '<button class="btn btn-line btn-sm" onclick="testRemote(\'' + r.id + '\')">Test</button>' +
+        '<button class="btn btn-line btn-sm" onclick="viewDrivers(\'' + r.id + '\')">Drivers</button>' +
+        '<button class="btn btn-line btn-sm" onclick="editRemote(\'' + r.id + '\')">Edit</button>' +
+        '<button class="btn btn-danger btn-sm" onclick="deleteRemote(\'' + r.id + '\')">Delete</button>' +
+      '</div><div class="drivers-list" id="drv-' + r.id + '" style="display:none"></div></div>';
+  }).join('');
+}
+async function testRemote(rid) {
+  toast('Testing connection…');
+  try { const r = await api('/api/remotes/' + rid + '/test', { method: 'POST' });
+    toast('Connected — ' + (r.driver_count != null ? r.driver_count + ' drivers registered' : 'ok'), 'ok');
+  } catch (e) { toast('Test failed: ' + e.message, 'bad'); }
+}
+async function viewDrivers(rid) {
+  const box = $('drv-' + rid);
+  if (box.style.display === 'block') { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  box.innerHTML = '<span class="hint">Loading…</span>';
+  try {
+    const drivers = await api('/api/remotes/' + rid + '/drivers');
+    if (!Array.isArray(drivers) || !drivers.length) { box.innerHTML = '<span class="hint">No drivers registered.</span>'; return; }
+    box.innerHTML = drivers.map(d => {
+      const id = d.driver_id || d.id || '?';
+      const nm = (d.name && (d.name.en || Object.values(d.name)[0])) || id;
+      return '<div class="driver-item"><span>' + esc(nm) + ' (' + esc(id) + ')</span>' +
+        '<button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="unregisterDriver(\'' + rid + '\',\'' + esc(id) + '\')">Unregister</button></div>';
+    }).join('');
+  } catch (e) { box.innerHTML = '<span class="hint" style="color:var(--red)">' + esc(e.message) + '</span>'; }
+}
+async function unregisterDriver(rid, driverId) {
+  if (!confirm('Unregister ' + driverId + ' from this remote?')) return;
+  try { await api('/api/remotes/' + rid + '/drivers/' + encodeURIComponent(driverId), { method: 'DELETE' });
+    toast('Unregistered ' + driverId, 'ok'); viewDrivers(rid); viewDrivers(rid);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+function editRemote(rid) {
+  const r = (REMOTES.remotes || []).find(x => x.id === rid); if (!r) return;
+  $('remEditId').value = r.id;
+  $('remName').value = r.name || '';
+  $('remAddr').value = r.scheme + '://' + r.host + ':' + r.port;
+  $('remPin').value = '';
+  $('remApiKey').value = '';
+  $('remAdv').value = r.advertise_ip || '';
+  $('remTls').checked = !!r.verify_tls;
+  $('remFormTitle').textContent = 'Edit ' + r.name;
+  $('remSaveBtn').textContent = 'Save changes';
+  $('remCancelEdit').style.display = 'inline-block';
+}
+function resetRemoteForm() {
+  $('remEditId').value = '';
+  ['remName','remAddr','remPin','remApiKey','remAdv'].forEach(id => $(id).value = '');
+  $('remTls').checked = false;
+  $('remFormTitle').textContent = 'Add a remote';
+  $('remSaveBtn').textContent = 'Add remote';
+  $('remCancelEdit').style.display = 'none';
+}
+async function saveRemote() {
+  const body = {
+    name: $('remName').value.trim(),
+    address: $('remAddr').value.trim(),
+    pin: $('remPin').value,
+    api_key: $('remApiKey').value,
+    advertise_ip: $('remAdv').value.trim(),
+    verify_tls: $('remTls').checked,
+  };
+  if (!body.name || !body.address) { toast('Name and address are required', 'bad'); return; }
+  const editId = $('remEditId').value;
+  try {
+    if (editId) await api('/api/remotes/' + editId, { method: 'PUT', body: JSON.stringify(body) });
+    else await api('/api/remotes', { method: 'POST', body: JSON.stringify(body) });
+    toast('Remote saved', 'ok');
+    resetRemoteForm();
+    await loadRemotes();
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function deleteRemote(rid) {
+  if (!confirm('Delete this remote? Registered integrations stay on the remote.')) return;
+  try { await api('/api/remotes/' + rid, { method: 'DELETE' }); toast('Remote deleted', 'ok'); await loadRemotes(); }
+  catch (e) { toast(e.message, 'bad'); }
+}
+async function registerIntegration(id) {
+  if (!REMOTES.active) { toast('Add and select a remote first', 'bad'); openRemotes(); return; }
+  const r = activeRemote();
+  const it = INSTALLED.find(x => x.id === id);
+  if (it && it.status !== 'running' && !confirm('This integration is not running. The remote may fail to connect. Register anyway?')) return;
+  toast('Registering on ' + (r ? r.name : 'remote') + '…');
+  try {
+    const res = await api('/api/remotes/' + REMOTES.active + '/register', {
+      method: 'POST', body: JSON.stringify({ integration_id: id }),
+    });
+    toast('Registered ' + res.driver_id + ' (' + res.driver_url + ')', 'ok');
+  } catch (e) { toast('Register failed: ' + e.message, 'bad'); }
+}
+
 function switchTab(t) {
   TAB = t;
   $('browse').style.display = t === 'browse' ? 'block' : 'none';
@@ -740,6 +928,7 @@ async function init() {
   try { await loadRegistry(false); } catch (e) {}
   await loadInstalled();
   loadUpdateStatus();
+  loadRemotes();
   if (installedTimer) clearInterval(installedTimer);
   installedTimer = setInterval(() => { if (!document.querySelector('.modal-back.show')) loadInstalled(); }, 6000);
 }
