@@ -639,7 +639,7 @@ function renderInstalled() {
         '<div class="meta">' +
           '<span class="status-tag">' + statusLed(it.status) + statusText + '</span>' +
           '<span>port ' + esc(String(it.port)) + '</span>' +
-          '<span class="src">' + esc(it.source || '') + '</span>' +
+          '<span class="src">' + esc(it.source || '') + (it.stack && it.stack !== 'dockerfile' && it.source !== 'ghcr' ? ' · ' + esc(it.stack) : '') + '</span>' +
           '<span class="ver">' + esc(ver) + '</span>' +
           updateBadge +
           crashHint +

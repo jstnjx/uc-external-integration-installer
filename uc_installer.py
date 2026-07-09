@@ -615,6 +615,85 @@ def detect_entrypoint(app_dir: Path) -> str:
     return ""
 
 
+# --- multi-language source builds -------------------------------------------
+# Integrations aren't all Python — they're written in Node/TypeScript, C#,
+# Rust, Go, etc. When the repo ships no Dockerfile, detect the stack from its
+# files and generate an appropriate build+run recipe. Each image reads the same
+# UC_* env vars at runtime (passed by the container), so no per-language env is
+# needed — only the build toolchain and the start command differ.
+
+NODE_DOCKERFILE = r"""FROM node:20-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git python3 make g++ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY . /app
+RUN if [ -f package-lock.json ]; then npm ci || npm install; else npm install; fi
+RUN node -e "const s=require('./package.json').scripts||{};process.exit(s.build?0:1)" && npm run build || true
+CMD ["sh","/app/uc-entry.node.sh"]
+"""
+
+NODE_ENTRY = r"""#!/bin/sh
+set -e
+cd /app
+if node -e "const s=require('./package.json').scripts||{};process.exit(s.start?0:1)" 2>/dev/null; then
+  echo "Starting via: npm start"; exec npm start
+fi
+MAIN=$(node -e "try{const p=require('./package.json');let m=p.main;if(p.bin&&typeof p.bin==='object'){m=Object.values(p.bin)[0]||m}else if(typeof p.bin==='string'){m=p.bin}console.log(m||'')}catch(e){}")
+if [ -n "$MAIN" ] && [ -f "$MAIN" ]; then echo "Starting $MAIN"; exec node "$MAIN"; fi
+for f in dist/index.js dist/driver.js dist/main.js build/index.js index.js driver.js src/index.js src/driver.js; do
+  [ -f "$f" ] && { echo "Starting $f"; exec node "$f"; }
+done
+echo "No Node entrypoint found (no start script, package.json main, or dist/index.js)."; exit 1
+"""
+
+DOTNET_DOCKERFILE = r"""FROM mcr.microsoft.com/dotnet/sdk:8.0
+WORKDIR /src
+COPY . /src
+RUN PROJ=$(ls *.sln 2>/dev/null | head -1); if [ -z "$PROJ" ]; then PROJ=$(find . -name '*.csproj' | head -1); fi; echo "Publishing $PROJ"; dotnet publish "$PROJ" -c Release -o /out
+WORKDIR /out
+CMD ["sh","-c","ENTRY=$(ls *.runtimeconfig.json 2>/dev/null | head -1 | sed 's/.runtimeconfig.json$//'); echo \"Starting $ENTRY.dll\"; exec dotnet \"$ENTRY.dll\""]
+"""
+
+RUST_DOCKERFILE = r"""FROM rust:slim
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY . /app
+RUN cargo build --release
+CMD ["sh","-c","BIN=$(find target/release -maxdepth 1 -type f -executable ! -name '*.d' | head -1); echo \"Starting $BIN\"; exec \"$BIN\""]
+"""
+
+GO_DOCKERFILE = r"""FROM golang:alpine AS build
+RUN apk add --no-cache git
+WORKDIR /src
+COPY . /src
+RUN go build -o /out/driver . || go build -o /out/driver ./... || sh -c 'D=$(dirname $(grep -rl "func main" --include=*.go . | head -1)); go build -o /out/driver "./$D"'
+FROM alpine
+RUN apk add --no-cache ca-certificates
+COPY --from=build /out/driver /usr/local/bin/driver
+CMD ["/usr/local/bin/driver"]
+"""
+
+
+def detect_stack(app_dir: Path) -> str:
+    """Identify the integration's language/runtime from repo files."""
+    def exists(*names: str) -> bool:
+        return any((app_dir / n).exists() for n in names)
+
+    def glob(pattern: str) -> bool:
+        return next(iter(app_dir.glob(pattern)), None) is not None
+
+    if glob("*.sln") or glob("*.csproj") or glob("**/*.csproj"):
+        return "dotnet"
+    if exists("Cargo.toml"):
+        return "rust"
+    if exists("go.mod"):
+        return "go"
+    if exists("package.json"):
+        return "node"
+    if exists("requirements.txt", "pyproject.toml", "setup.py") or glob("**/*.py"):
+        return "python"
+    return "unknown"
+
+
 def clone_or_update(repo: str, app_dir: Path, log, ref: str | None = None) -> None:
     pinned = ref and ref != "latest"
     if pinned:
@@ -726,13 +805,14 @@ def _find_repo_dockerfile(app_dir: Path) -> str | None:
     return None
 
 
-def _build_image(entry: dict[str, Any], job: Job, version: str = "latest") -> tuple[str, str | None]:
-    """Clone + build. Returns (image_tag, entrypoint).
+def _build_image(entry: dict[str, Any], job: Job,
+                 version: str = "latest") -> tuple[str, str | None, str]:
+    """Clone + build. Returns (image_tag, entrypoint, stack).
 
-    Prefers the project's own Dockerfile — its author knows the correct entrypoint,
-    port and dependencies. Only falls back to the generic Dockerfile (which has to
-    *guess* the entrypoint) when the repo ships none. entrypoint is returned only
-    for the generic path; for a repo Dockerfile the image's own CMD is used.
+    Prefers the project's own Dockerfile — its author knows the correct build.
+    Otherwise detects the language (Node/TypeScript, .NET, Rust, Go, Python) and
+    generates a matching Dockerfile. `entrypoint` is only used by the Python
+    generic path; other stacks start via the image's CMD.
     """
     integration_id = entry["id"]
     repo = entry["repository"]
@@ -743,18 +823,38 @@ def _build_image(entry: dict[str, Any], job: Job, version: str = "latest") -> tu
     tag = f"uc-local/{integration_id}:{safe}"
     client = get_docker()
 
+    entrypoint: str | None = None
     repo_dockerfile = _find_repo_dockerfile(app_dir)
     if repo_dockerfile:
         dockerfile = repo_dockerfile
-        entrypoint: str | None = None  # use the image's own CMD/ENTRYPOINT
+        stack = "dockerfile"
         job.log(f"Using the project's own {repo_dockerfile}")
     else:
-        (app_dir / "Dockerfile.external").write_text(GENERIC_DOCKERFILE)
-        (app_dir / "docker-entry.external.sh").write_text(GENERIC_ENTRY)
+        stack = detect_stack(app_dir)
+        job.log(f"No Dockerfile in repo — detected a {stack} project.")
+        if stack == "python":
+            (app_dir / "Dockerfile.external").write_text(GENERIC_DOCKERFILE)
+            (app_dir / "docker-entry.external.sh").write_text(GENERIC_ENTRY)
+            entrypoint = detect_entrypoint(app_dir)
+            job.log(f"Detected entrypoint: {entrypoint or '(auto at runtime)'}")
+        elif stack == "node":
+            (app_dir / "Dockerfile.external").write_text(NODE_DOCKERFILE)
+            (app_dir / "uc-entry.node.sh").write_text(NODE_ENTRY)
+        elif stack == "dotnet":
+            (app_dir / "Dockerfile.external").write_text(DOTNET_DOCKERFILE)
+        elif stack == "rust":
+            (app_dir / "Dockerfile.external").write_text(RUST_DOCKERFILE)
+        elif stack == "go":
+            (app_dir / "Dockerfile.external").write_text(GO_DOCKERFILE)
+        else:
+            raise RuntimeError(
+                "Couldn't determine how to build this integration. Looked for a "
+                "Dockerfile, package.json (Node/TypeScript), *.csproj/*.sln (.NET), "
+                "Cargo.toml (Rust), go.mod (Go), and requirements.txt/pyproject.toml "
+                "(Python) but found none. Add a Dockerfile to the repository, or "
+                "choose a version that publishes a prebuilt image."
+            )
         dockerfile = "Dockerfile.external"
-        entrypoint = detect_entrypoint(app_dir)
-        job.log("No Dockerfile in repo — using generic build. "
-                f"Detected entrypoint: {entrypoint or '(auto at runtime)'}")
 
     job.log(f"Building {tag} ...")
     for chunk in client.api.build(
@@ -772,13 +872,13 @@ def _build_image(entry: dict[str, Any], job: Job, version: str = "latest") -> tu
         elif "error" in chunk:
             raise RuntimeError(chunk["error"])
     job.log(f"Built {tag}")
-    return tag, entrypoint
+    return tag, entrypoint, stack
 
 
 def _run_container(
     entry: dict[str, Any], image: str, source: str, port: int,
     extra_env: dict[str, str], entrypoint: str | None, job: Job,
-    version: str = "latest",
+    version: str = "latest", stack: str | None = None,
 ):
     integration_id = entry["id"]
     cfg = CONFIG_DIR / integration_id
@@ -826,6 +926,7 @@ def _run_container(
         "env": extra_env or {},
         "entrypoint": entrypoint or "",
         "version": version or "latest",
+        "stack": stack if stack is not None else prev.get("stack"),
         "installed_at": prev.get("installed_at") or datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
@@ -839,10 +940,11 @@ def do_install(entry: dict[str, Any], port: int, extra_env: dict[str, str],
         image = image_from_repo(entry["repository"], version)
         source = "ghcr"
         entrypoint = None
+        stack = None
         if not _pull_image(image, job):
-            image, entrypoint = _build_image(entry, job, version)
+            image, entrypoint, stack = _build_image(entry, job, version)
             source = "build"
-        _run_container(entry, image, source, port, extra_env, entrypoint, job, version)
+        _run_container(entry, image, source, port, extra_env, entrypoint, job, version, stack)
         job.finish("success")
     except Exception as exc:  # noqa: BLE001
         job.finish("error", f"ERROR: {exc}")
@@ -857,7 +959,8 @@ def do_reconfigure(entry: dict[str, Any], port: int, extra_env: dict[str, str], 
         source = rec.get("source", "ghcr")
         entrypoint = rec.get("entrypoint") or None
         version = rec.get("version", "latest")
-        _run_container(entry, image, source, port, extra_env, entrypoint, job, version)
+        _run_container(entry, image, source, port, extra_env, entrypoint, job, version,
+                       rec.get("stack"))
         job.finish("success")
     except Exception as exc:  # noqa: BLE001
         job.finish("error", f"ERROR: {exc}")
