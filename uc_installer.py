@@ -31,13 +31,16 @@ Configuration (environment variables):
 """
 from __future__ import annotations
 
+import io
 import json
 import os
+import platform
 import re
 import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import urllib.parse
@@ -47,8 +50,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -76,9 +79,13 @@ SERVICE_UNIT = os.environ.get("UC_INSTALLER_SERVICE", "uc-external-integration-i
 # Container labels used to identify things this installer owns.
 LABEL_MANAGED = "uc.installer"
 LABEL_ID = "uc.integration.id"
+LABEL_INSTANCE = "uc.instance.id"
+LABEL_ORDINAL = "uc.instance.ordinal"
 LABEL_NAME = "uc.integration.name"
 LABEL_SOURCE = "uc.integration.source"  # "ghcr" or "build"
 LABEL_PORT = "uc.integration.port"
+
+ALERT_WEBHOOK = os.environ.get("UC_INSTALLER_ALERT_WEBHOOK", "").strip()
 
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
@@ -104,9 +111,57 @@ DATA_DIR = _resolve_data_dir()
 APPS_DIR = DATA_DIR / "apps"
 CONFIG_DIR = DATA_DIR / "config"
 STATE_FILE = DATA_DIR / "state.json"
+EVENTS_FILE = DATA_DIR / "events.jsonl"
 REGISTRY_CACHE = DATA_DIR / "registry.json"
 for d in (APPS_DIR, CONFIG_DIR):
     d.mkdir(parents=True, exist_ok=True)
+
+# Serializes source builds/installs (the "install queue") so concurrent installs
+# don't clobber the shared clone/build directories.
+_install_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Event log
+# ---------------------------------------------------------------------------
+
+_events_lock = threading.Lock()
+
+
+def record_event(kind: str, instance_id: str | None, message: str) -> None:
+    """Append an event to the log (kept for the UI activity feed + alerts)."""
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "kind": kind,               # install | remove | register | update | state | error | alert
+        "instance_id": instance_id,
+        "message": message,
+    }
+    try:
+        with _events_lock:
+            with EVENTS_FILE.open("a") as fh:
+                fh.write(json.dumps(entry) + "\n")
+            # trim to the last ~1000 lines occasionally
+            if EVENTS_FILE.stat().st_size > 500_000:
+                lines = EVENTS_FILE.read_text().splitlines()[-1000:]
+                EVENTS_FILE.write_text("\n".join(lines) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def load_events(limit: int = 200) -> list[dict[str, Any]]:
+    if not EVENTS_FILE.exists():
+        return []
+    try:
+        lines = EVENTS_FILE.read_text().splitlines()[-limit:]
+        out = []
+        for ln in lines:
+            try:
+                out.append(json.loads(ln))
+            except Exception:  # noqa: BLE001
+                continue
+        out.reverse()  # newest first
+        return out
+    except Exception:  # noqa: BLE001
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -271,12 +326,13 @@ def remote_all_drivers(remote: dict[str, Any], driver_type: str | None = None,
 
 def build_driver_payload(entry: dict[str, Any], rec: dict[str, Any],
                          advertise_ip: str, port: int) -> dict[str, Any]:
-    driver_id = (entry.get("driver_id") or rec.get("id") or entry.get("id"))
-    name = entry.get("name") or rec.get("name") or driver_id
+    # instance-specific driver_id/name so multiple instances register distinctly
+    driver_id = rec.get("driver_id") or entry.get("driver_id") or rec.get("id") or entry.get("id")
+    name = rec.get("label") or entry.get("name") or rec.get("name") or driver_id
     payload: dict[str, Any] = {
         "driver_id": driver_id,
         "name": {"en": name},
-        "version": entry.get("version") or "1.0.0",
+        "version": rec.get("version") or entry.get("version") or "1.0.0",
         "driver_url": f"ws://{advertise_ip}:{port}",
     }
     if entry.get("description"):
@@ -535,18 +591,112 @@ def base_environment(port: int, entrypoint: str | None) -> dict[str, str]:
     return env
 
 
-def next_free_port() -> int:
-    used = set()
-    state = load_state()
-    for rec in state["integrations"].values():
-        try:
-            used.add(int(rec.get("port")))
-        except (TypeError, ValueError):
-            continue
+def _host_port_bound(port: int) -> bool:
+    """True if something on the host is already bound to the TCP port."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("0.0.0.0", int(port)))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
+
+
+def _port_free(port: int, exclude: str | None = None) -> bool:
+    """Free = not claimed by another managed instance and not bound on the host."""
+    for iid, rec in load_state()["integrations"].items():
+        if iid != exclude and str(rec.get("port")) == str(port):
+            return False
+    return not _host_port_bound(port)
+
+
+def next_free_port(exclude: str | None = None) -> int:
     port = PORT_START
-    while port in used:
+    while not _port_free(port, exclude=exclude):
         port += 1
     return port
+
+
+def resolve_port(requested: int | None, instance_id: str | None = None) -> int:
+    """Validate a requested port or auto-assign a free one."""
+    if requested:
+        if not _port_free(int(requested), exclude=instance_id):
+            raise HTTPException(409, f"Port {requested} is already in use — pick another or leave it blank to auto-assign.")
+        return int(requested)
+    return next_free_port(exclude=instance_id)
+
+
+# ---- instances -------------------------------------------------------------
+
+
+def next_instance_id(integration_id: str) -> tuple[str, int]:
+    """(instance_id, ordinal) for a NEW instance. First instance reuses the
+    integration id (backward compatible); extras get an -iN suffix."""
+    state = load_state()["integrations"]
+    if integration_id not in state:
+        return integration_id, 1
+    n = 2
+    while f"{integration_id}-i{n}" in state:
+        n += 1
+    return f"{integration_id}-i{n}", n
+
+
+def instance_driver_id(base: str, ordinal: int) -> str:
+    return base if ordinal <= 1 else f"{base}_{ordinal}"
+
+
+def instance_label(name: str, ordinal: int) -> str:
+    return name if ordinal <= 1 else f"{name} #{ordinal}"
+
+
+def integration_instances(integration_id: str) -> list[str]:
+    return [iid for iid, rec in load_state()["integrations"].items()
+            if rec.get("integration_id", iid) == integration_id]
+
+
+def reconcile_state() -> None:
+    """On startup, adopt managed containers missing from state (e.g. after a
+    manual docker action) so the UI reflects reality."""
+    try:
+        client = get_docker()
+        containers = client.containers.list(all=True, filters={"label": f"{LABEL_MANAGED}=managed"})
+    except Exception:  # noqa: BLE001
+        return
+    state = load_state()
+    changed = False
+    for c in containers:
+        instance_id = c.name
+        if instance_id in state["integrations"]:
+            continue
+        labels = c.attrs.get("Config", {}).get("Labels", {}) or {}
+        integration_id = labels.get(LABEL_ID, instance_id)
+        try:
+            ordinal = int(labels.get(LABEL_ORDINAL, "1"))
+        except ValueError:
+            ordinal = 1
+        try:
+            port = int(labels.get(LABEL_PORT, "0"))
+        except ValueError:
+            port = 0
+        name = labels.get(LABEL_NAME, integration_id)
+        image = (c.image.tags or [""])[0] if c.image else ""
+        state["integrations"][instance_id] = {
+            "instance_id": instance_id, "id": instance_id, "integration_id": integration_id,
+            "instance": ordinal, "name": name, "label": instance_label(name, ordinal),
+            "driver_id": instance_driver_id(
+                (find_integration(integration_id) or {}).get("driver_id") or integration_id, ordinal),
+            "repository": (find_integration(integration_id) or {}).get("repository", ""),
+            "image": image, "source": labels.get(LABEL_SOURCE, "unknown"), "port": port,
+            "env": {}, "entrypoint": "", "version": "latest", "stack": None,
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "adopted": True,
+        }
+        changed = True
+        record_event("state", instance_id, f"Adopted orphaned container '{instance_id}'")
+    if changed:
+        save_state(state)
 
 
 # ---- source build helpers --------------------------------------------------
@@ -978,49 +1128,61 @@ def _build_image(entry: dict[str, Any], job: Job,
 
 
 def _run_container(
-    entry: dict[str, Any], image: str, source: str, port: int,
-    extra_env: dict[str, str], entrypoint: str | None, job: Job,
-    version: str = "latest", stack: str | None = None,
+    entry: dict[str, Any], instance_id: str, ordinal: int, image: str, source: str,
+    port: int, extra_env: dict[str, str], entrypoint: str | None, job: Job,
+    version: str = "latest", stack: str | None = None, platform: str | None = None,
 ):
     integration_id = entry["id"]
-    cfg = CONFIG_DIR / integration_id
+    cfg = CONFIG_DIR / instance_id
     cfg.mkdir(parents=True, exist_ok=True)
 
     env = base_environment(port, entrypoint)
     env.update(extra_env or {})
 
-    # remove any previous container with the same name
-    existing = _container_for(integration_id)
+    existing = _container_for(instance_id)
     if existing is not None:
         job.log("Removing previous container ...")
         existing.remove(force=True)
 
-    job.log(f"Starting container '{integration_id}' on port {port} ...")
+    base_driver = entry.get("driver_id") or integration_id
+    driver_id = instance_driver_id(base_driver, ordinal)
+    name = entry.get("name", integration_id)
+    label = instance_label(name, ordinal)
+
+    run_kwargs: dict[str, Any] = {}
+    if platform:
+        run_kwargs["platform"] = platform
+
+    job.log(f"Starting container '{instance_id}' on port {port} ...")
     get_docker().containers.run(
         image,
-        name=integration_id,
+        name=instance_id,
         detach=True,
         network_mode="host",
-        # on-failure (not unless-stopped) so a container that can't start settles
-        # into "exited" and is visibly broken, instead of masquerading as a
-        # permanent "restarting" crash loop.
         restart_policy={"Name": "on-failure", "MaximumRetryCount": 5},
         environment=env,
         volumes={str(cfg): {"bind": "/config", "mode": "rw"}},
         labels={
             LABEL_MANAGED: "managed",
             LABEL_ID: integration_id,
-            LABEL_NAME: entry.get("name", integration_id),
+            LABEL_INSTANCE: instance_id,
+            LABEL_ORDINAL: str(ordinal),
+            LABEL_NAME: name,
             LABEL_SOURCE: source,
             LABEL_PORT: str(port),
         },
+        **run_kwargs,
     )
 
-    prev = load_state()["integrations"].get(integration_id, {})
+    prev = load_state()["integrations"].get(instance_id, {})
     record_integration({
-        "id": integration_id,
-        "name": entry.get("name", integration_id),
-        "driver_id": entry.get("driver_id") or integration_id,
+        "instance_id": instance_id,
+        "id": instance_id,
+        "integration_id": integration_id,
+        "instance": ordinal,
+        "name": name,
+        "label": label,
+        "driver_id": driver_id,
         "repository": entry.get("repository", ""),
         "image": image,
         "source": source,
@@ -1032,39 +1194,160 @@ def _run_container(
         "installed_at": prev.get("installed_at") or datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
+    record_event("install", instance_id, f"{label} started on port {port} ({source})")
     job.log("Done.")
 
 
-def do_install(entry: dict[str, Any], port: int, extra_env: dict[str, str],
-               job: Job, version: str = "latest"):
+def do_install(entry: dict[str, Any], instance_id: str, ordinal: int, port: int,
+               extra_env: dict[str, str], job: Job, version: str = "latest"):
     try:
-        version = version or "latest"
-        image = image_from_repo(entry["repository"], version)
-        source = "ghcr"
-        entrypoint = None
-        stack = None
-        if not _pull_image(image, job):
-            image, entrypoint, stack = _build_image(entry, job, version)
-            source = "build"
-        _run_container(entry, image, source, port, extra_env, entrypoint, job, version, stack)
+        if _install_lock.locked():
+            job.log("Another install is in progress — queued, waiting ...")
+        with _install_lock:
+            version = version or "latest"
+            image = image_from_repo(entry["repository"], version)
+            source = "ghcr"
+            entrypoint = None
+            stack = None
+            if not _pull_image(image, job):
+                image, entrypoint, stack = _build_image(entry, job, version)
+                source = "build"
+            _run_container(entry, instance_id, ordinal, image, source, port,
+                           extra_env, entrypoint, job, version, stack)
+        job.finish("success")
+    except Exception as exc:  # noqa: BLE001
+        record_event("error", instance_id, f"install failed: {exc}")
+        job.finish("error", f"ERROR: {exc}")
+
+
+def do_reconfigure(rec: dict[str, Any], port: int, extra_env: dict[str, str], job: Job):
+    """Re-run an existing instance with new port/env, reusing its resolved image."""
+    try:
+        integration_id = rec.get("integration_id", rec["id"])
+        entry = find_integration(integration_id) or {
+            "id": integration_id, "name": rec.get("name", integration_id),
+            "repository": rec.get("repository", ""), "driver_id": rec.get("driver_id"),
+        }
+        image = rec.get("image") or image_from_repo(rec.get("repository", ""))
+        source = rec.get("source", "ghcr")
+        entrypoint = rec.get("entrypoint") or None
+        version = rec.get("version", "latest")
+        _run_container(entry, rec["instance_id"], rec.get("instance", 1), image, source,
+                       port, extra_env, entrypoint, job, version, rec.get("stack"))
         job.finish("success")
     except Exception as exc:  # noqa: BLE001
         job.finish("error", f"ERROR: {exc}")
 
 
-def do_reconfigure(entry: dict[str, Any], port: int, extra_env: dict[str, str], job: Job):
-    """Re-run with new port/env, reusing the already-resolved image."""
+def do_rebuild(rec: dict[str, Any], job: Job, version: str | None = None):
+    """Force a fresh pull/build of an existing instance."""
+    integration_id = rec.get("integration_id", rec["id"])
+    entry = find_integration(integration_id)
+    if entry is None:
+        job.finish("error", "ERROR: integration is no longer in the registry")
+        return
+    do_install(entry, rec["instance_id"], rec.get("instance", 1), int(rec["port"]),
+               rec.get("env", {}), job, version or rec.get("version", "latest"))
+
+
+# ---- install from an Unfolded Circle release archive (.tar.gz) --------------
+
+ARCHIVE_DOCKERFILE = """FROM debian:stable-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libicu-dev libssl3 && rm -rf /var/lib/apt/lists/* || true
+WORKDIR /app
+COPY . /app
+RUN chmod +x /app/bin/driver 2>/dev/null || true
+CMD ["/app/bin/driver"]
+"""
+
+_ELF_MACHINES = {0x3E: "x86_64", 0xB7: "aarch64", 0x28: "arm", 0x08: "mips"}
+_ARCH_PLATFORM = {"x86_64": "linux/amd64", "aarch64": "linux/arm64", "arm": "linux/arm/v7"}
+
+
+def _elf_arch(path: Path) -> str | None:
     try:
-        state = load_state()
-        rec = state["integrations"].get(entry["id"], {})
-        image = rec.get("image") or image_from_repo(entry["repository"])
-        source = rec.get("source", "ghcr")
-        entrypoint = rec.get("entrypoint") or None
-        version = rec.get("version", "latest")
-        _run_container(entry, image, source, port, extra_env, entrypoint, job, version,
-                       rec.get("stack"))
+        with open(path, "rb") as f:
+            head = f.read(20)
+        if head[:4] != b"\x7fELF":
+            return None
+        return _ELF_MACHINES.get(int.from_bytes(head[18:20], "little"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _host_platform() -> str:
+    return _ARCH_PLATFORM.get(platform.machine().lower().replace("arm64", "aarch64"), "linux/amd64")
+
+
+def _safe_extract(tar: tarfile.TarFile, dest: Path, only: str | None = None) -> None:
+    dest = dest.resolve()
+    for m in tar.getmembers():
+        if only and m.name != only and not m.name.startswith(only.rstrip("/") + "/"):
+            continue
+        target = (dest / m.name).resolve()
+        if not str(target).startswith(str(dest)):
+            continue  # skip path traversal
+        tar.extract(m, dest)
+
+
+def do_install_archive(data: bytes, filename: str, job: Job):
+    try:
+        with _install_lock:
+            job.log(f"Reading {filename} ({len(data)//1024} KB) ...")
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+                dj_member = next((m for m in tar.getmembers() if m.name.rstrip("/").endswith("driver.json")), None)
+                if dj_member is None:
+                    raise RuntimeError("no driver.json in archive — not a UC integration release")
+                dj = json.loads(tar.extractfile(dj_member).read().decode("utf-8"))
+
+            driver_id = dj.get("driver_id") or "archive-driver"
+            name = dj.get("name")
+            if isinstance(name, dict):
+                name = name.get("en") or next(iter(name.values()), driver_id)
+            name = name or driver_id
+            ver = dj.get("version", "latest")
+            slug = re.sub(r"[^a-z0-9_.-]", "-", driver_id.lower())
+            instance_id = f"archive-{slug}"
+            app_dir = APPS_DIR / instance_id
+            shutil.rmtree(app_dir, ignore_errors=True)
+            app_dir.mkdir(parents=True)
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+                _safe_extract(tar, app_dir)
+
+            binpath = app_dir / "bin" / "driver"
+            if not binpath.exists():
+                binpath = next((p for p in app_dir.glob("**/driver") if p.is_file()), None)
+            arch = _elf_arch(binpath) if binpath else None
+            build_platform = _ARCH_PLATFORM.get(arch or "")
+            host_pf = _host_platform()
+            job.log(f"driver_id={driver_id} name={name} version={ver} binary_arch={arch} host={host_pf}")
+            plat = None
+            if build_platform and build_platform != host_pf:
+                plat = build_platform
+                job.log(f"Binary is {arch} but host is {host_pf} — using {plat} "
+                        "(requires QEMU/binfmt emulation on the host).")
+
+            (app_dir / "Dockerfile.external").write_text(ARCHIVE_DOCKERFILE)
+            tag = f"uc-local/{instance_id}:{re.sub(r'[^a-z0-9_.-]','-',str(ver).lower())}"
+            job.log(f"Building {tag} ...")
+            client = get_docker()
+            build_kwargs = {"platform": plat} if plat else {}
+            for chunk in client.api.build(path=str(app_dir), dockerfile="Dockerfile.external",
+                                          tag=tag, rm=True, pull=True, decode=True, **build_kwargs):
+                if "stream" in chunk:
+                    t = chunk["stream"].strip()
+                    if t:
+                        job.log(t)
+                elif "error" in chunk:
+                    raise RuntimeError(chunk["error"])
+
+            entry = {"id": instance_id, "name": name, "repository": "", "driver_id": driver_id}
+            port = next_free_port()
+            _run_container(entry, instance_id, 1, tag, "archive", port, {}, None, job,
+                           str(ver), "archive", platform=plat)
         job.finish("success")
     except Exception as exc:  # noqa: BLE001
+        record_event("error", None, f"archive install failed: {exc}")
         job.finish("error", f"ERROR: {exc}")
 
 
@@ -1194,6 +1477,10 @@ class InstallBody(BaseModel):
 class ConfigBody(BaseModel):
     port: int | None = None
     env: dict[str, str] = {}
+
+
+class RebuildBody(BaseModel):
+    version: str | None = None
 
 
 class RemoteBody(BaseModel):
@@ -1360,6 +1647,7 @@ def api_installed() -> list[dict[str, Any]]:
 
 @app.post("/api/integrations/{integration_id}/install", dependencies=[Depends(require_token)])
 def api_install(integration_id: str, body: InstallBody) -> dict[str, str]:
+    """Install (or replace) the default instance of an integration."""
     entry = find_integration(integration_id)
     if entry is None:
         raise HTTPException(404, "Unknown integration")
@@ -1367,29 +1655,59 @@ def api_install(integration_id: str, body: InstallBody) -> dict[str, str]:
         raise HTTPException(400, "This integration has no installable repository")
     if not docker_available():
         raise HTTPException(503, "Docker is not available")
-    port = body.port or next_free_port()
+    port = resolve_port(body.port, instance_id=integration_id)
     job = new_job("install", integration_id)
     threading.Thread(
-        target=do_install, args=(entry, port, body.env, job, body.version or "latest"), daemon=True
+        target=do_install,
+        args=(entry, integration_id, 1, port, body.env, job, body.version or "latest"),
+        daemon=True,
     ).start()
     return {"job_id": job.id}
 
 
-@app.post("/api/integrations/{integration_id}/config", dependencies=[Depends(require_token)])
-def api_config(integration_id: str, body: ConfigBody) -> dict[str, str]:
+@app.post("/api/integrations/{integration_id}/add-instance", dependencies=[Depends(require_token)])
+def api_add_instance(integration_id: str, body: InstallBody) -> dict[str, str]:
+    """Spin up an additional, independent instance of an integration."""
     entry = find_integration(integration_id)
     if entry is None:
         raise HTTPException(404, "Unknown integration")
-    rec = load_state()["integrations"].get(integration_id)
-    if rec is None:
-        raise HTTPException(404, "Integration is not installed")
+    if not is_installable(entry):
+        raise HTTPException(400, "This integration has no installable repository")
     if not docker_available():
         raise HTTPException(503, "Docker is not available")
-    port = body.port or int(rec.get("port") or next_free_port())
-    job = new_job("reconfigure", integration_id)
+    instance_id, ordinal = next_instance_id(integration_id)
+    port = resolve_port(body.port, instance_id=instance_id)
+    job = new_job("install", instance_id)
     threading.Thread(
-        target=do_reconfigure, args=(entry, port, body.env, job), daemon=True
+        target=do_install,
+        args=(entry, instance_id, ordinal, port, body.env, job, body.version or "latest"),
+        daemon=True,
     ).start()
+    return {"job_id": job.id, "instance_id": instance_id}
+
+
+@app.post("/api/instances/{instance_id}/config", dependencies=[Depends(require_token)])
+def api_config(instance_id: str, body: ConfigBody) -> dict[str, str]:
+    rec = load_state()["integrations"].get(instance_id)
+    if rec is None:
+        raise HTTPException(404, "Instance is not installed")
+    if not docker_available():
+        raise HTTPException(503, "Docker is not available")
+    port = resolve_port(body.port or int(rec.get("port") or 0), instance_id=instance_id)
+    job = new_job("reconfigure", instance_id)
+    threading.Thread(target=do_reconfigure, args=(rec, port, body.env, job), daemon=True).start()
+    return {"job_id": job.id}
+
+
+@app.post("/api/instances/{instance_id}/rebuild", dependencies=[Depends(require_token)])
+def api_rebuild(instance_id: str, body: RebuildBody) -> dict[str, str]:
+    rec = load_state()["integrations"].get(instance_id)
+    if rec is None:
+        raise HTTPException(404, "Instance is not installed")
+    if not docker_available():
+        raise HTTPException(503, "Docker is not available")
+    job = new_job("rebuild", instance_id)
+    threading.Thread(target=do_rebuild, args=(rec, job, body.version), daemon=True).start()
     return {"job_id": job.id}
 
 
@@ -1401,53 +1719,78 @@ def api_job(job_id: str) -> dict[str, Any]:
     return job.to_dict()
 
 
-def _lifecycle(integration_id: str, action: str) -> dict[str, str]:
+def _lifecycle(instance_id: str, action: str) -> dict[str, str]:
     if not docker_available():
         raise HTTPException(503, "Docker is not available")
-    c = _container_for(integration_id)
+    c = _container_for(instance_id)
     if c is None:
         raise HTTPException(404, "Container not found")
     getattr(c, action)()
+    record_event("state", instance_id, f"{action} requested")
     return {"status": "ok", "action": action}
 
 
-@app.post("/api/integrations/{integration_id}/start", dependencies=[Depends(require_token)])
-def api_start(integration_id: str):
-    return _lifecycle(integration_id, "start")
+@app.post("/api/instances/{instance_id}/start", dependencies=[Depends(require_token)])
+def api_start(instance_id: str):
+    return _lifecycle(instance_id, "start")
 
 
-@app.post("/api/integrations/{integration_id}/stop", dependencies=[Depends(require_token)])
-def api_stop(integration_id: str):
-    return _lifecycle(integration_id, "stop")
+@app.post("/api/instances/{instance_id}/stop", dependencies=[Depends(require_token)])
+def api_stop(instance_id: str):
+    return _lifecycle(instance_id, "stop")
 
 
-@app.post("/api/integrations/{integration_id}/restart", dependencies=[Depends(require_token)])
-def api_restart(integration_id: str):
-    return _lifecycle(integration_id, "restart")
+@app.post("/api/instances/{instance_id}/restart", dependencies=[Depends(require_token)])
+def api_restart(instance_id: str):
+    return _lifecycle(instance_id, "restart")
 
 
-@app.delete("/api/integrations/{integration_id}", dependencies=[Depends(require_token)])
-def api_remove(integration_id: str, purge: bool = False):
+@app.delete("/api/instances/{instance_id}", dependencies=[Depends(require_token)])
+def api_remove(instance_id: str, purge: bool = False):
+    rec = load_state()["integrations"].get(instance_id, {})
+    integration_id = rec.get("integration_id", instance_id)
     if docker_available():
-        c = _container_for(integration_id)
+        c = _container_for(instance_id)
         if c is not None:
             c.remove(force=True)
-    forget_integration(integration_id)
+    forget_integration(instance_id)
     if purge:
-        shutil.rmtree(CONFIG_DIR / integration_id, ignore_errors=True)
-        shutil.rmtree(APPS_DIR / integration_id, ignore_errors=True)
+        shutil.rmtree(CONFIG_DIR / instance_id, ignore_errors=True)
+        # only drop the shared source clone when no sibling instances remain
+        if not integration_instances(integration_id):
+            shutil.rmtree(APPS_DIR / integration_id, ignore_errors=True)
+    record_event("remove", instance_id, f"removed{' (purged config)' if purge else ''}")
     return {"status": "removed", "purged": purge}
 
 
-@app.get("/api/integrations/{integration_id}/logs", dependencies=[Depends(require_token)])
-def api_logs(integration_id: str, tail: int = 300):
+@app.get("/api/instances/{instance_id}/logs", dependencies=[Depends(require_token)])
+def api_logs(instance_id: str, tail: int = 300):
     if not docker_available():
         raise HTTPException(503, "Docker is not available")
-    c = _container_for(integration_id)
+    c = _container_for(instance_id)
     if c is None:
         raise HTTPException(404, "Container not found")
     logs = c.logs(tail=tail, timestamps=False).decode("utf-8", "replace")
     return {"logs": logs}
+
+
+@app.get("/api/instances/{instance_id}/logs/stream", dependencies=[Depends(require_token)])
+def api_logs_stream(instance_id: str, tail: int = 200):
+    if not docker_available():
+        raise HTTPException(503, "Docker is not available")
+    c = _container_for(instance_id)
+    if c is None:
+        raise HTTPException(404, "Container not found")
+
+    def gen():
+        try:
+            for line in c.logs(stream=True, follow=True, tail=tail):
+                text = line.decode("utf-8", "replace").rstrip("\n")
+                yield f"data: {text}\n\n"
+        except Exception:  # noqa: BLE001
+            return
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 # ---- versions & update detection -------------------------------------------
@@ -1531,32 +1874,66 @@ def _compute_stats(container) -> dict[str, Any]:
     }
 
 
+def _probe_port(port: Any, host: str = "127.0.0.1", timeout: float = 1.0) -> bool | None:
+    """True if something is accepting TCP connections on the port, False if not,
+    None if the port is unknown."""
+    try:
+        p = int(port)
+    except (TypeError, ValueError):
+        return None
+    try:
+        with socket.create_connection((host, p), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _probe_health(port: Any) -> str | None:
+    ok = _probe_port(port)
+    if ok is None:
+        return None
+    return "responding" if ok else "unreachable"
+
+
 def _refresh_stats() -> None:
     try:
         data: dict[str, Any] = {}
         running = []
-        for iid in load_state()["integrations"]:
+        for iid, rec in load_state()["integrations"].items():
             c = _container_for(iid)
             if c is None:
                 data[iid] = {"status": "missing"}
                 continue
             state = c.attrs.get("State", {}) or {}
+            docker_health = (state.get("Health") or {}).get("Status")
             data[iid] = {
                 "status": c.status,
-                "health": (state.get("Health") or {}).get("Status"),
+                "health": docker_health,
                 "started_at": state.get("StartedAt"),
                 "restart_count": c.attrs.get("RestartCount", 0),
             }
             if c.status == "running":
-                running.append((iid, c))
+                running.append((iid, c, rec.get("port"), docker_health))
         if running:
             import concurrent.futures as cf
+
+            def _work(item):
+                iid, c, port, docker_health = item
+                s = _compute_stats(c)
+                # No Docker HEALTHCHECK on these images — derive health from an
+                # application-level probe of the integration's WebSocket port.
+                if not docker_health:
+                    h = _probe_health(port)
+                    if h:
+                        s["health"] = h
+                return iid, s
+
             with cf.ThreadPoolExecutor(max_workers=min(8, len(running))) as ex:
-                futs = {ex.submit(_compute_stats, c): iid for iid, c in running}
+                futs = [ex.submit(_work, it) for it in running]
                 for fut in cf.as_completed(futs, timeout=12):
-                    iid = futs[fut]
                     try:
-                        data[iid].update(fut.result())
+                        iid, s = fut.result()
+                        data[iid].update(s)
                     except Exception:  # noqa: BLE001
                         pass
         with _stats_lock:
@@ -1737,8 +2114,8 @@ def api_remotes_register(rid: str, body: RegisterBody) -> dict[str, Any]:
     remote = _get_remote_or_404(rid)
     rec = load_state()["integrations"].get(body.integration_id)
     if rec is None:
-        raise HTTPException(404, "Integration is not installed")
-    entry = find_integration(body.integration_id) or {}
+        raise HTTPException(404, "Instance is not installed")
+    entry = find_integration(rec.get("integration_id", body.integration_id)) or {}
     port = int(rec.get("port"))
     advertise = body.advertise_ip or remote.get("advertise_ip") or detect_host_ip(remote["host"])
     if not advertise:
@@ -1750,15 +2127,32 @@ def api_remotes_register(rid: str, body: RegisterBody) -> dict[str, Any]:
         r = remote_request(remote, "POST", "/intg/drivers", json_body=payload, timeout=20.0)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Could not reach remote: {exc}")
-    if r.status_code in (200, 201):
-        with _remote_drivers_lock:
-            _remote_drivers_cache.pop(rid, None)
-        return {"ok": True, "driver_id": payload["driver_id"], "driver_url": payload["driver_url"]}
-    if r.status_code == 401:
-        raise HTTPException(401, "Authentication failed — check the PIN or API key")
-    if r.status_code == 409:
-        raise HTTPException(409, f"Driver '{payload['driver_id']}' is already registered on this remote")
-    raise HTTPException(502, f"Remote returned {r.status_code}: {r.text[:300]}")
+    if r.status_code not in (200, 201):
+        if r.status_code == 401:
+            raise HTTPException(401, "Authentication failed — check the PIN or API key")
+        if r.status_code == 409:
+            raise HTTPException(409, f"Driver '{payload['driver_id']}' is already registered on this remote")
+        raise HTTPException(502, f"Remote returned {r.status_code}: {r.text[:300]}")
+
+    with _remote_drivers_lock:
+        _remote_drivers_cache.pop(rid, None)
+
+    # Confirmation: poll the remote until the driver actually appears/connects.
+    confirmed, state = False, None
+    for _ in range(6):
+        time.sleep(1.0)
+        for d in _fetch_all_drivers(remote):
+            if isinstance(d, dict) and d.get("driver_id") == payload["driver_id"]:
+                confirmed = True
+                state = d.get("driver_state") or d.get("state")
+                break
+        if confirmed and state in ("CONNECTED", "IDLE", None):
+            break
+    record_event("register", body.integration_id,
+                 f"registered {payload['driver_id']} on {remote.get('name', rid)}"
+                 + (f" ({state})" if state else ""))
+    return {"ok": True, "driver_id": payload["driver_id"], "driver_url": payload["driver_url"],
+            "confirmed": confirmed, "driver_state": state}
 
 
 @app.delete("/api/remotes/{rid}/drivers/{driver_id}", dependencies=[Depends(require_token)])
@@ -1773,6 +2167,130 @@ def api_remotes_unregister(rid: str, driver_id: str) -> dict[str, str]:
             _remote_drivers_cache.pop(rid, None)
         return {"status": "unregistered", "driver_id": driver_id}
     raise HTTPException(502, f"Remote returned {r.status_code}")
+
+
+# ---- events, backup, maintenance -------------------------------------------
+
+
+@app.get("/api/events", dependencies=[Depends(require_token)])
+def api_events(limit: int = 100) -> dict[str, Any]:
+    return {"events": load_events(limit)}
+
+
+@app.get("/api/backup", dependencies=[Depends(require_token)])
+def api_backup():
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        if STATE_FILE.exists():
+            tar.add(str(STATE_FILE), arcname="state.json")
+        if CONFIG_DIR.exists():
+            tar.add(str(CONFIG_DIR), arcname="config")
+    buf.seek(0)
+    fn = "uc-installer-backup-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".tar.gz"
+    return StreamingResponse(
+        buf, media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+@app.post("/api/restore", dependencies=[Depends(require_token)])
+async def api_restore(file: UploadFile = File(...)) -> dict[str, Any]:
+    data = await file.read()
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+            _safe_extract(tar, DATA_DIR, only="state.json")
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+            _safe_extract(tar, DATA_DIR, only="config")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Invalid backup archive: {exc}")
+    record_event("state", None, "restored config + state from backup")
+    return {"status": "restored", "note": "Rebuild instances to recreate their containers."}
+
+
+@app.post("/api/maintenance/prune", dependencies=[Depends(require_token)])
+def api_prune() -> dict[str, Any]:
+    if not docker_available():
+        raise HTTPException(503, "Docker is not available")
+    client = get_docker()
+    in_use = {rec.get("image") for rec in load_state()["integrations"].values()}
+    removed = []
+    try:
+        for img in client.images.list():
+            tags = img.tags or []
+            local = [t for t in tags if t.startswith("uc-local/")]
+            if local and not any(t in in_use for t in tags):
+                try:
+                    client.images.remove(img.id, force=True)
+                    removed.extend(local)
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
+    reclaimed = 0
+    try:
+        reclaimed = (client.images.prune(filters={"dangling": True}) or {}).get("SpaceReclaimed", 0)
+    except Exception:  # noqa: BLE001
+        pass
+    record_event("state", None, f"pruned {len(removed)} build image(s)")
+    return {"removed": removed, "space_reclaimed": reclaimed}
+
+
+@app.post("/api/maintenance/reconcile", dependencies=[Depends(require_token)])
+def api_reconcile() -> dict[str, Any]:
+    reconcile_state()
+    return {"status": "ok"}
+
+
+@app.post("/api/install-archive", dependencies=[Depends(require_token)])
+async def api_install_archive(file: UploadFile = File(...)) -> dict[str, str]:
+    if not docker_available():
+        raise HTTPException(503, "Docker is not available")
+    data = await file.read()
+    job = new_job("archive-install", file.filename or "archive")
+    threading.Thread(target=do_install_archive, args=(data, file.filename or "archive.tar.gz", job),
+                     daemon=True).start()
+    return {"job_id": job.id}
+
+
+# ---- alerts (optional webhook) ---------------------------------------------
+
+_alert_state: dict[str, str] = {}
+
+
+def _fire_webhook(message: str) -> None:
+    if not ALERT_WEBHOOK:
+        return
+    try:
+        if "ntfy" in ALERT_WEBHOOK:
+            httpx.post(ALERT_WEBHOOK, content=message.encode("utf-8"), timeout=10.0)
+        else:
+            httpx.post(ALERT_WEBHOOK, json={"text": message, "message": message}, timeout=10.0)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _alert_monitor() -> None:
+    while True:
+        try:
+            for iid, rec in load_state()["integrations"].items():
+                c = _container_for(iid)
+                if c is None:
+                    continue
+                if c.status == "running":
+                    cur = _probe_health(rec.get("port")) or "running"
+                else:
+                    cur = c.status
+                prev = _alert_state.get(iid)
+                bad = cur in ("unreachable", "exited", "dead")
+                was_bad = prev in ("unreachable", "exited", "dead")
+                if bad and not was_bad and prev is not None:
+                    msg = f"{rec.get('label', iid)} is {cur}"
+                    record_event("alert", iid, msg)
+                    _fire_webhook(msg)
+                _alert_state[iid] = cur
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(60)
 
 
 # ---- static frontend -------------------------------------------------------
@@ -1794,6 +2312,16 @@ def index():
 # ---------------------------------------------------------------------------
 
 registry_commit()  # warm the registry-commit cache in the background
+
+# Adopt any orphaned managed containers into state on startup.
+try:
+    reconcile_state()
+except Exception:  # noqa: BLE001
+    pass
+
+# Optional health-alert monitor (only meaningful if a webhook is configured).
+if ALERT_WEBHOOK:
+    threading.Thread(target=_alert_monitor, daemon=True).start()
 
 if __name__ == "__main__":
     import uvicorn

@@ -21,6 +21,8 @@ Environment=UC_PORT_START=8000
 Environment=UC_INSTALLER_UPDATE_REPO=https://github.com/jstnjx/uc-external-integration-installer
 Environment=UC_INSTALLER_UPDATE_BRANCH=main
 Environment=UC_INSTALLER_SERVICE=uc-external-integration-installer
+# Optional: POST alerts when an instance goes unreachable (ntfy or JSON webhook).
+# Environment=UC_INSTALLER_ALERT_WEBHOOK=https://ntfy.sh/your-topic
 # Strongly recommended: set a token so the Docker control plane isn't open.
 # Environment=UC_INSTALLER_TOKEN=change-me
 

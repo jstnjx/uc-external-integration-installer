@@ -49,6 +49,7 @@ Set via environment (or `systemctl edit uc-external-integration-installer`):
 | `UC_INSTALLER_UPDATE_REPO` | this GitHub repo | Source repo for self-update |
 | `UC_INSTALLER_UPDATE_BRANCH` | `main` | Branch the updater tracks |
 | `UC_INSTALLER_SERVICE` | `uc-external-integration-installer` | systemd unit restarted after an update |
+| `UC_INSTALLER_ALERT_WEBHOOK` | *(empty)* | If set, POSTs an alert when an instance goes unreachable/exits (ntfy URL or generic JSON webhook) |
 
 ## Updating
 
@@ -92,10 +93,37 @@ uptime and health**, and a **Details** panel expands to the full record (image,
 driver id, build stack, install/update timestamps, repository) plus live usage
 (CPU %, memory used/limit, processes, uptime, health, restart count). Stats are
 sampled from Docker in the background and cached, so the UI never blocks on them.
+Since these images don't ship a Docker `HEALTHCHECK`, **health** is derived from an
+application-level probe of the integration's port: `responding` if it's accepting
+connections, `unreachable` if the container is running but not serving (a real Docker
+healthcheck is used instead when an image defines one).
 
 Remote credentials are saved in `UC_INSTALLER_DATA/remotes.json` (file mode `600`,
 plaintext). Keep the data directory private; prefer a per-remote PIN/API key you
 can revoke over reusing sensitive credentials.
+
+## Instances, activity & maintenance
+
+- **Multiple instances.** Install an integration once for the default instance, then
+  use **+ Instance** (on its Browse card) to run additional independent copies — each
+  gets its own port, `/config`, and a distinct `driver_id` (`base`, `base_2`, …) so
+  they register separately on a remote. Rows are labelled `Name`, `Name #2`, …
+- **Install from a release archive.** "Install from file" accepts an Unfolded Circle
+  `.tar.gz` release: it reads `driver.json`, detects the binary's CPU architecture,
+  and runs it in a container. Native ARM64 releases run on an ARM64 host; on a
+  mismatched host it builds for the binary's platform (needs QEMU/binfmt emulation).
+- **Activity log** (≣) records installs, registrations, removals, adoptions and alerts.
+- **Maintenance** (⛭): download a **backup** of all config + state, **restore** it,
+  **reconcile** (adopt managed containers missing from the list after a reboot or
+  manual `docker` action), and **prune** build images no longer used by any instance.
+- **Port-conflict guard**: installs/reconfigures refuse a port already used by another
+  instance or bound on the host, and auto-assign a free one otherwise.
+- **Registration confirmation**: after registering, the installer polls the remote
+  until the driver actually appears/connects and reports the result.
+- **Live logs**: the Logs dialog can **Follow** (server-sent events stream) and
+  **Download** the full log. Installs are **serialized** so concurrent builds don't clash.
+- **Alerts**: set `UC_INSTALLER_ALERT_WEBHOOK` to be notified when an instance goes
+  unreachable or exits.
 
 ## Security
 
@@ -164,6 +192,11 @@ uc-external-integration-installer/
 `GET /api/update/status` · `POST /api/update/apply` ·
 `GET /api/integrations/{id}/versions` · `GET /api/updates` · `GET /api/registrations` ·
 `GET /api/stats` ·
+`POST /api/integrations/{id}/add-instance` ·
+`POST /api/instances/{iid}/{start|stop|restart|config|rebuild}` ·
+`DELETE /api/instances/{iid}` · `GET /api/instances/{iid}/logs[/stream]` ·
+`GET /api/events` · `GET /api/backup` · `POST /api/restore` · `POST /api/install-archive` ·
+`POST /api/maintenance/{prune|reconcile}` ·
 `GET/POST /api/remotes` · `PUT/DELETE /api/remotes/{id}` ·
 `POST /api/remotes/{id}/test` · `POST /api/remotes/{id}/register` ·
 `GET /api/remotes/{id}/drivers` · `DELETE /api/remotes/{id}/drivers/{driver_id}`

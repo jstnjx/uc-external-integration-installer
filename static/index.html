@@ -337,6 +337,8 @@
       <div class="remote-picker">
         <select id="remoteSelect" onchange="setActiveRemote(this.value)" title="Active remote"></select>
         <button class="btn-icon" onclick="openRemotes()" title="Manage remotes">⚙</button>
+        <button class="btn-icon" onclick="openActivity()" title="Activity log">≣</button>
+        <button class="btn-icon" onclick="openMaint()" title="Maintenance">⛭</button>
       </div>
       <div class="stat" id="lockStat" style="display:none"><span class="led warn"></span> locked</div>
     </div>
@@ -364,6 +366,8 @@
       <div class="search"><input id="searchInput" placeholder="Search integrations or developers…" oninput="renderBrowse()" /></div>
       <select class="filter" id="catFilter" onchange="renderBrowse()"><option value="">All categories</option></select>
       <button class="btn-ghost" onclick="refreshRegistry()">Refresh registry</button>
+      <button class="btn-ghost" onclick="$('archiveFile').click()" title="Install from an Unfolded Circle release .tar.gz">Install from file</button>
+      <input type="file" id="archiveFile" accept=".tar.gz,.tgz,application/gzip" style="display:none" onchange="installArchive(this.files[0])" />
     </div>
     <div class="grid" id="browseGrid"></div>
   </section>
@@ -387,12 +391,12 @@
         <select id="cfgVersion" class="mono" style="width:100%"></select>
         <div class="hint">Which release to install. "latest" tracks the newest build; a specific tag pins it.</div>
       </div>
-      <div class="field">
+      <div class="field" id="cfgPortField">
         <label>Integration port</label>
         <input id="cfgPort" class="mono" placeholder="auto" />
         <div class="hint">The HTTP port the integration advertises on the host network. Leave blank to auto-assign.</div>
       </div>
-      <div class="field">
+      <div class="field" id="cfgEnvField">
         <label>Environment variables</label>
         <div id="envList"></div>
         <button class="btn btn-line btn-sm" onclick="addEnvRow()">+ Add variable</button>
@@ -471,10 +475,57 @@
   <div class="modal">
     <header>
       <h2>Logs</h2><span class="sub" id="logSub"></span>
-      <button class="btn btn-line btn-sm" style="margin-left:auto" onclick="refreshLogs()">Refresh</button>
-      <button class="x" onclick="closeModal('logBack')">×</button>
+      <button class="btn btn-line btn-sm" style="margin-left:auto" id="logFollowBtn" onclick="toggleFollow()">Follow</button>
+      <button class="btn btn-line btn-sm" onclick="refreshLogs()">Refresh</button>
+      <button class="btn btn-line btn-sm" onclick="downloadLogs()">Download</button>
+      <button class="x" onclick="closeLogs()">×</button>
     </header>
     <div class="body"><div class="console" id="logConsole" style="max-height:60vh"></div></div>
+  </div>
+</div>
+
+<!-- ACTIVITY MODAL -->
+<div class="modal-back" id="actBack">
+  <div class="modal">
+    <header>
+      <h2>Activity</h2><span class="sub">recent events</span>
+      <button class="btn btn-line btn-sm" style="margin-left:auto" onclick="loadActivity()">Refresh</button>
+      <button class="x" onclick="closeModal('actBack')">×</button>
+    </header>
+    <div class="body"><div id="actList"></div></div>
+  </div>
+</div>
+
+<!-- MAINTENANCE MODAL -->
+<div class="modal-back" id="maintBack">
+  <div class="modal">
+    <header>
+      <h2>Maintenance</h2><span class="sub">backup · restore · cleanup</span>
+      <button class="x" onclick="closeModal('maintBack')">×</button>
+    </header>
+    <div class="body">
+      <div class="field">
+        <label>Backup</label>
+        <div class="hint" style="margin:0 0 8px">Download a tar.gz of all instance config and state.</div>
+        <button class="btn btn-primary btn-sm" onclick="downloadBackup()">Download backup</button>
+      </div>
+      <div class="field">
+        <label>Restore</label>
+        <div class="hint" style="margin:0 0 8px">Restore config + state from a backup, then rebuild instances.</div>
+        <input type="file" id="restoreFile" accept=".tar.gz,.tgz,application/gzip" style="display:none" onchange="restoreBackup(this.files[0])" />
+        <button class="btn btn-line btn-sm" onclick="$('restoreFile').click()">Choose backup…</button>
+      </div>
+      <div class="field">
+        <label>Reconcile</label>
+        <div class="hint" style="margin:0 0 8px">Adopt any managed containers missing from the list (after manual docker changes or a reboot).</div>
+        <button class="btn btn-line btn-sm" onclick="doReconcile()">Reconcile now</button>
+      </div>
+      <div class="field">
+        <label>Prune images</label>
+        <div class="hint" style="margin:0 0 8px">Delete built images no longer used by any instance to reclaim disk.</div>
+        <button class="btn btn-line btn-sm" onclick="doPrune()">Prune build images</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -491,6 +542,7 @@ const EXPANDED = new Set();  // ids whose details panel is open
 let TAB = 'browse';
 let cfgMode = 'install';   // install | version | config
 let cfgTarget = null;
+let cfgIntegration = null;  // parent integration id (for version lookups)
 let installedTimer = null;
 let logTarget = null;
 
@@ -577,7 +629,8 @@ function renderBrowse() {
     let action;
     if (!it.installable) action = '<span class="hint" style="margin:0">' +
       (it.official ? 'Official — runs on the remote, not here' : 'Bundled first-party — not installable here') + '</span>';
-    else if (isInstalled) action = '<button class="btn btn-line btn-sm" onclick="switchTab(\'installed\')">Manage</button>';
+    else if (isInstalled) action = '<button class="btn btn-line btn-sm" onclick="addInstance(\'' + it.id + '\')">+ Instance</button>' +
+      '<button class="btn btn-line btn-sm" onclick="switchTab(\'installed\')">Manage</button>';
     else action = '<button class="btn btn-primary btn-sm" onclick="openInstall(\'' + it.id + '\')">Install</button>';
     card.innerHTML =
       '<div class="card-head"><div style="flex:1">' +
@@ -630,19 +683,23 @@ function fmtUptime(iso) {
   return m + 'm';
 }
 function healthColor(h) {
-  return h === 'healthy' ? 'var(--emerald)' : h === 'unhealthy' ? 'var(--rose)' : 'var(--amber)';
+  if (h === 'healthy' || h === 'responding') return 'var(--emerald)';
+  if (h === 'unhealthy' || h === 'unreachable') return 'var(--rose)';
+  return 'var(--amber)';   // starting / other
 }
 function detailsHtml(it) {
   const s = STATS[it.id] || {};
   const link = it.repository
     ? '<a href="' + esc(it.repository) + '" target="_blank" rel="noopener">' + esc(it.repository.replace('https://github.com/','')) + '</a>'
     : '—';
+  const wsUrl = 'ws://' + location.hostname + ':' + it.port;
   const info = [
     ['Version', 'v' + esc(it.version || 'latest')],
     ['Image', esc(it.image || '—')],
     ['Build', esc((it.source || '—') + (it.stack && it.stack !== 'dockerfile' ? ' · ' + it.stack : ''))],
     ['Driver id', esc(it.driver_id || '—')],
     ['Port', esc(String(it.port))],
+    ['Add URL', '<span class="mono">' + esc(wsUrl) + '</span> <button class="btn btn-line btn-sm" style="padding:1px 7px" onclick="navigator.clipboard&&navigator.clipboard.writeText(\'' + wsUrl + '\');toast(\'Copied\',\'ok\')">copy</button>'],
     ['Installed', it.installed_at ? new Date(it.installed_at).toLocaleString() : '—'],
     ['Updated', it.updated_at ? new Date(it.updated_at).toLocaleString() : '—'],
     ['Repository', link],
@@ -655,7 +712,7 @@ function detailsHtml(it) {
     ['Memory', memStr],
     ['Processes', s.pids != null ? esc(String(s.pids)) : '—'],
     ['Uptime', fmtUptime(s.started_at)],
-    ['Health', s.health ? '<span style="color:' + healthColor(s.health) + '">' + esc(s.health) + '</span>' : 'no healthcheck'],
+    ['Health', s.health ? '<span style="color:' + healthColor(s.health) + '">' + esc(s.health) + '</span>' : 'unknown'],
     ['Restarts', esc(String(it.restart_count || 0))],
   ];
   const kv = arr => arr.map(([k, v]) => '<div class="kv"><span class="k2">' + k + '</span><span class="v2">' + v + '</span></div>').join('');
@@ -712,7 +769,7 @@ function renderInstalled() {
     const expanded = EXPANDED.has(it.id);
     row.innerHTML =
       '<div style="min-width:190px;flex:1">' +
-        '<div class="name">' + esc(it.name) + '</div>' +
+        '<div class="name">' + esc(it.label || it.name) + '</div>' +
         '<div class="meta">' +
           '<span class="status-tag">' + statusLed(it.status) + statusText + '</span>' +
           '<span>port ' + esc(String(it.port)) + '</span>' +
@@ -743,24 +800,32 @@ async function loadStats() {
 }
 
 async function lifecycle(id, action) {
-  try { await api('/api/integrations/' + id + '/' + action, { method: 'POST' });
+  try { await api('/api/instances/' + id + '/' + action, { method: 'POST' });
     toast(action + ' ' + id, 'ok'); setTimeout(loadInstalled, 400);
   } catch (e) { toast(e.message, 'bad'); }
 }
 async function rebuild(id) {
   const it = INSTALLED.find(x => x.id === id); if (!it) return;
-  if (!confirm('Rebuild ' + id + '? Re-pulls or rebuilds from source and recreates the container on port ' + it.port + '.')) return;
+  if (!confirm('Rebuild ' + (it.label || id) + '? Re-pulls or rebuilds from source and recreates the container.')) return;
   try {
-    const body = { port: it.port, env: it.env || {} };
-    const { job_id } = await api('/api/integrations/' + id + '/install', { method: 'POST', body: JSON.stringify(body) });
+    const { job_id } = await api('/api/instances/' + id + '/rebuild', { method: 'POST', body: '{}' });
     followJob(job_id, 'Rebuilding ' + id);
   } catch (e) { toast(e.message, 'bad'); }
 }
+async function addInstance(integrationId) {
+  const it = REGISTRY.integrations.find(x => x.id === integrationId);
+  if (!confirm('Start an additional instance of ' + (it ? it.name : integrationId) + '? It gets its own port, config and driver id.')) return;
+  try {
+    const { job_id, instance_id } = await api('/api/integrations/' + integrationId + '/add-instance', { method: 'POST', body: '{}' });
+    followJob(job_id, 'Adding instance ' + instance_id);
+  } catch (e) { toast(e.message, 'bad'); }
+}
 async function removeIntegration(id) {
-  if (!confirm('Remove ' + id + '? The container is deleted. Config is kept unless you confirm purge next.')) return;
-  const purge = confirm('Also delete its saved config and cloned source? OK = purge, Cancel = keep.');
-  try { await api('/api/integrations/' + id + '?purge=' + purge, { method: 'DELETE' });
-    toast('Removed ' + id, 'ok'); loadInstalled();
+  const it = INSTALLED.find(x => x.id === id);
+  if (!confirm('Remove ' + (it ? it.label : id) + '? The container is deleted. Config is kept unless you confirm purge next.')) return;
+  const purge = confirm('Also delete its saved config' + (it && it.instance > 1 ? '' : ' and cloned source') + '? OK = purge, Cancel = keep.');
+  try { await api('/api/instances/' + id + '?purge=' + purge, { method: 'DELETE' });
+    toast('Removed ' + id, 'ok'); loadInstalled(); loadRegistrations();
   } catch (e) { toast(e.message, 'bad'); }
 }
 
@@ -779,11 +844,11 @@ function addEnvRow(k, v) {
                   '<button class="btn btn-line btn-sm" onclick="this.parentElement.remove()">✕</button>';
   $('envList').appendChild(row);
 }
-async function loadVersionOptions(id, selected) {
+async function loadVersionOptions(integrationId, selected) {
   const sel = $('cfgVersion');
   sel.innerHTML = '<option>loading…</option>';
   try {
-    const data = await api('/api/integrations/' + id + '/versions');
+    const data = await api('/api/integrations/' + integrationId + '/versions');
     const seen = new Set();
     sel.innerHTML = '';
     (data.versions || []).forEach(v => {
@@ -797,52 +862,57 @@ async function loadVersionOptions(id, selected) {
     if (!sel.options.length) sel.innerHTML = '<option value="latest">latest</option>';
   } catch (e) { sel.innerHTML = '<option value="latest">latest</option>'; }
 }
+function _cfgFields(version, port, env) {
+  $('cfgVersionField').style.display = version ? 'block' : 'none';
+  $('cfgPortField').style.display = port ? 'block' : 'none';
+  $('cfgEnvField').style.display = env ? 'block' : 'none';
+}
 function openInstall(id) {
   const it = REGISTRY.integrations.find(x => x.id === id); if (!it) return;
-  cfgMode = 'install'; cfgTarget = id;
+  cfgMode = 'install'; cfgTarget = id; cfgIntegration = id;
   $('cfgTitle').textContent = 'Install ' + it.name;
   $('cfgSub').textContent = id;
-  $('cfgPort').value = '';
-  $('envList').innerHTML = '';
-  $('cfgVersionField').style.display = 'block';
+  $('cfgPort').value = ''; $('envList').innerHTML = '';
+  _cfgFields(true, true, true);
   $('cfgSubmit').textContent = 'Install';
   $('cfgBack').classList.add('show');
   loadVersionOptions(id, 'latest');
 }
 function openVersion(id) {
   const it = INSTALLED.find(x => x.id === id); if (!it) return;
-  cfgMode = 'version'; cfgTarget = id;
-  $('cfgTitle').textContent = 'Change version — ' + it.name;
+  cfgMode = 'version'; cfgTarget = id; cfgIntegration = it.integration_id || id;
+  $('cfgTitle').textContent = 'Change version — ' + (it.label || it.name);
   $('cfgSub').textContent = id;
-  $('cfgPort').value = it.port || '';
-  $('envList').innerHTML = '';
-  Object.entries(it.env || {}).forEach(([k, v]) => addEnvRow(k, v));
-  $('cfgVersionField').style.display = 'block';
+  _cfgFields(true, false, false);
   $('cfgSubmit').textContent = 'Install version';
   $('cfgBack').classList.add('show');
-  loadVersionOptions(id, it.version || 'latest');
+  loadVersionOptions(cfgIntegration, it.version || 'latest');
 }
 function openConfig(id) {
   const it = INSTALLED.find(x => x.id === id); if (!it) return;
-  cfgMode = 'config'; cfgTarget = id;
-  $('cfgTitle').textContent = 'Configure ' + it.name;
+  cfgMode = 'config'; cfgTarget = id; cfgIntegration = it.integration_id || id;
+  $('cfgTitle').textContent = 'Configure ' + (it.label || it.name);
   $('cfgSub').textContent = id;
-  $('cfgPort').value = it.port || '';
-  $('envList').innerHTML = '';
+  $('cfgPort').value = it.port || ''; $('envList').innerHTML = '';
   Object.entries(it.env || {}).forEach(([k, v]) => addEnvRow(k, v));
-  $('cfgVersionField').style.display = 'none';   // reconfigure reuses the image
+  _cfgFields(false, true, true);
   $('cfgSubmit').textContent = 'Apply & restart';
   $('cfgBack').classList.add('show');
 }
 async function submitConfig() {
-  const body = { env: envRows() };
-  const p = $('cfgPort').value.trim();
-  if (p) body.port = parseInt(p, 10);
-  const isInstall = cfgMode === 'install' || cfgMode === 'version';
-  if (isInstall) body.version = $('cfgVersion').value || 'latest';
-  const path = isInstall
-    ? '/api/integrations/' + cfgTarget + '/install'
-    : '/api/integrations/' + cfgTarget + '/config';
+  let path, body = {};
+  if (cfgMode === 'install') {
+    body = { env: envRows(), version: $('cfgVersion').value || 'latest' };
+    const p = $('cfgPort').value.trim(); if (p) body.port = parseInt(p, 10);
+    path = '/api/integrations/' + cfgTarget + '/install';
+  } else if (cfgMode === 'version') {
+    body = { version: $('cfgVersion').value || 'latest' };
+    path = '/api/instances/' + cfgTarget + '/rebuild';
+  } else {
+    body = { env: envRows() };
+    const p = $('cfgPort').value.trim(); if (p) body.port = parseInt(p, 10);
+    path = '/api/instances/' + cfgTarget + '/config';
+  }
   const verb = cfgMode === 'install' ? 'Installing ' : cfgMode === 'version' ? 'Switching ' : 'Reconfiguring ';
   try {
     const { job_id } = await api(path, { method: 'POST', body: JSON.stringify(body) });
@@ -878,6 +948,8 @@ function closeJob() { closeModal('jobBack'); loadInstalled(); }
 
 // ---- logs ----
 async function openLogs(id) {
+  if (logSource) { logSource.close(); logSource = null; }
+  $('logFollowBtn').textContent = 'Follow'; $('logFollowBtn').classList.remove('det-open');
   logTarget = id;
   $('logSub').textContent = id;
   $('logConsole').textContent = 'Loading…';
@@ -887,7 +959,7 @@ async function openLogs(id) {
 async function refreshLogs() {
   if (!logTarget) return;
   try {
-    const { logs } = await api('/api/integrations/' + logTarget + '/logs?tail=400');
+    const { logs } = await api('/api/instances/' + logTarget + '/logs?tail=400');
     const c = $('logConsole');
     c.textContent = logs || '(no output yet)';
     c.scrollTop = c.scrollHeight;
@@ -1139,9 +1211,88 @@ async function registerIntegration(id) {
     const res = await api('/api/remotes/' + REMOTES.active + '/register', {
       method: 'POST', body: JSON.stringify({ integration_id: id }),
     });
-    toast('Registered ' + res.driver_id + ' (' + res.driver_url + ')', 'ok');
+    if (res.confirmed) {
+      toast('Registered ' + res.driver_id + (res.driver_state ? ' — ' + res.driver_state : ' — confirmed'), 'ok');
+    } else {
+      toast('Sent ' + res.driver_id + ', but the remote hasn\'t confirmed it yet — check the remote', 'bad');
+    }
     setTimeout(loadRegistrations, 500);
   } catch (e) { toast('Register failed: ' + e.message, 'bad'); }
+}
+
+// ---- activity / maintenance / archive / streaming logs ----
+function openActivity() { $('actBack').classList.add('show'); loadActivity(); }
+async function loadActivity() {
+  try {
+    const { events } = await api('/api/events?limit=150');
+    const box = $('actList');
+    if (!events.length) { box.innerHTML = '<p class="hint">No activity yet.</p>'; return; }
+    const col = { error: 'var(--rose)', alert: 'var(--rose)', register: 'var(--emerald)', install: 'var(--emerald)', remove: 'var(--muted)', state: 'var(--amber)' };
+    box.innerHTML = events.map(e => {
+      const when = new Date(e.ts).toLocaleString();
+      return '<div class="kv"><span class="k2" style="color:' + (col[e.kind] || 'var(--muted)') + ';min-width:70px">' + esc(e.kind) + '</span>' +
+        '<span class="v2" style="text-align:left;flex:1">' + esc(e.message) +
+        (e.instance_id ? ' <span class="mono" style="color:var(--muted-2)">(' + esc(e.instance_id) + ')</span>' : '') + '</span>' +
+        '<span class="k2">' + esc(when) + '</span></div>';
+    }).join('');
+  } catch (e) { $('actList').innerHTML = '<p class="hint">' + esc(e.message) + '</p>'; }
+}
+function openMaint() { $('maintBack').classList.add('show'); }
+function downloadBackup() {
+  window.location.href = '/api/backup' + (token() ? '?token=' + encodeURIComponent(token()) : '');
+}
+async function restoreBackup(file) {
+  if (!file) return;
+  const fd = new FormData(); fd.append('file', file);
+  const h = {}; if (token()) h['Authorization'] = 'Bearer ' + token();
+  try {
+    const r = await fetch('/api/restore', { method: 'POST', headers: h, body: fd });
+    const j = await r.json(); if (!r.ok) throw new Error(j.detail || 'failed');
+    toast('Restored — rebuild instances to recreate their containers', 'ok'); loadInstalled();
+  } catch (e) { toast('Restore failed: ' + e.message, 'bad'); }
+  $('restoreFile').value = '';
+}
+async function doReconcile() {
+  try { await api('/api/maintenance/reconcile', { method: 'POST' }); toast('Reconciled', 'ok'); loadInstalled(); }
+  catch (e) { toast(e.message, 'bad'); }
+}
+async function doPrune() {
+  try { const r = await api('/api/maintenance/prune', { method: 'POST' }); toast('Pruned ' + ((r.removed || []).length) + ' image(s)', 'ok'); }
+  catch (e) { toast(e.message, 'bad'); }
+}
+async function installArchive(file) {
+  if (!file) return;
+  const fd = new FormData(); fd.append('file', file);
+  const h = {}; if (token()) h['Authorization'] = 'Bearer ' + token();
+  try {
+    const r = await fetch('/api/install-archive', { method: 'POST', headers: h, body: fd });
+    const j = await r.json(); if (!r.ok) throw new Error(j.detail || 'failed');
+    switchTab('installed'); followJob(j.job_id, 'Installing ' + file.name);
+  } catch (e) { toast('Archive install failed: ' + e.message, 'bad'); }
+  $('archiveFile').value = '';
+}
+let logSource = null;
+function toggleFollow() {
+  if (logSource) { logSource.close(); logSource = null; $('logFollowBtn').textContent = 'Follow'; $('logFollowBtn').classList.remove('det-open'); return; }
+  const t = token() ? ('?token=' + encodeURIComponent(token())) : '';
+  logSource = new EventSource('/api/instances/' + logTarget + '/logs/stream' + t);
+  const c = $('logConsole');
+  logSource.onmessage = (e) => { c.textContent += (c.textContent ? '\n' : '') + e.data; c.scrollTop = c.scrollHeight; };
+  logSource.onerror = () => {};
+  $('logFollowBtn').textContent = 'Following…'; $('logFollowBtn').classList.add('det-open');
+}
+async function downloadLogs() {
+  try {
+    const { logs } = await api('/api/instances/' + logTarget + '/logs?tail=5000');
+    const blob = new Blob([logs || ''], { type: 'text/plain' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = logTarget + '.log'; a.click(); URL.revokeObjectURL(a.href);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+function closeLogs() {
+  if (logSource) { logSource.close(); logSource = null; }
+  $('logFollowBtn').textContent = 'Follow'; $('logFollowBtn').classList.remove('det-open');
+  closeModal('logBack');
 }
 
 function switchTab(t) {
