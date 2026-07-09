@@ -648,9 +648,30 @@ echo "No Node entrypoint found (no start script, package.json main, or dist/inde
 DOTNET_DOCKERFILE = r"""FROM mcr.microsoft.com/dotnet/sdk:__SDK_TAG__
 WORKDIR /src
 COPY . /src
-RUN PROJ=$(ls *.sln 2>/dev/null | head -1); if [ -z "$PROJ" ]; then PROJ=$(find . -name '*.csproj' | head -1); fi; echo "Publishing $PROJ"; dotnet publish "$PROJ" -c Release -o /out
-WORKDIR /out
-CMD ["sh","-c","ENTRY=$(ls *.runtimeconfig.json 2>/dev/null | head -1 | sed 's/.runtimeconfig.json$//'); echo \"Starting $ENTRY.dll\"; exec dotnet \"$ENTRY.dll\""]
+RUN PROJ=$(ls *.sln 2>/dev/null | head -1); if [ -z "$PROJ" ]; then PROJ=$(find . -name '*.csproj' | head -1); fi; echo "Publishing $PROJ"; dotnet publish "$PROJ" -c Release --no-self-contained -p:PublishSingleFile=false -p:PublishAot=false -p:PublishReadyToRun=false -p:PublishTrimmed=false -o /out
+CMD ["sh","/src/uc-entry.dotnet.sh"]
+"""
+
+DOTNET_ENTRY = r"""#!/bin/sh
+set -e
+cd /out
+# framework-dependent publish: <name>.runtimeconfig.json + <name>.dll (arch-portable)
+RC=$(ls *.runtimeconfig.json 2>/dev/null | head -1 || true)
+if [ -n "$RC" ]; then
+  NAME=$(basename "$RC" .runtimeconfig.json)
+  if [ -f "$NAME.dll" ]; then echo "Starting: dotnet $NAME.dll"; exec dotnet "$NAME.dll"; fi
+  if [ -x "./$NAME" ]; then echo "Starting: ./$NAME"; exec "./$NAME"; fi
+fi
+# self-contained / single-file / native: run the app's native executable
+for f in *; do
+  [ -f "$f" ] && [ -x "$f" ] || continue
+  case "$f" in
+    createdump|apphost|*.dll|*.json|*.pdb|*.so|*.a|*.sh|*.map|web.config) continue ;;
+  esac
+  echo "Starting: ./$f"; exec "./$f"
+done
+echo "No runnable .NET entry found in /out. Contents:"; ls -la
+exit 1
 """
 
 RUST_DOCKERFILE = r"""FROM rust:slim
@@ -889,6 +910,7 @@ def _prepare_stack_build(app_dir: Path, stack: str, job: Job) -> tuple[str | Non
         sdk = _dotnet_sdk_tag(app_dir)
         job.log(f"Using .NET SDK image mcr.microsoft.com/dotnet/sdk:{sdk}")
         (app_dir / "Dockerfile.external").write_text(DOTNET_DOCKERFILE.replace("__SDK_TAG__", sdk))
+        (app_dir / "uc-entry.dotnet.sh").write_text(DOTNET_ENTRY)
         return "Dockerfile.external", None
     if stack == "rust":
         (app_dir / "Dockerfile.external").write_text(RUST_DOCKERFILE)
