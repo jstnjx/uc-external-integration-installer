@@ -46,6 +46,15 @@ sudo "$PREFIX/venv/bin/pip" install -r "$PREFIX/requirements.txt"
 echo "==> Installing systemd unit"
 sudo cp "$SRC_DIR/$SERVICE.service" "/etc/systemd/system/$SERVICE.service"
 sudo mkdir -p /var/lib/uc-external-integration-installer
+
+echo "==> Installing Nixpacks (universal source builder for any language)"
+if command -v nixpacks >/dev/null 2>&1; then
+  echo "    already installed: $(nixpacks --version 2>/dev/null || echo present)"
+else
+  curl -fsSL https://nixpacks.com/install.sh | sudo bash \
+    || echo "    (nixpacks install failed — built-in Node/Python/.NET/Rust/Go builders will still be used)"
+fi
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now "$SERVICE"
 

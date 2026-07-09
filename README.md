@@ -113,20 +113,29 @@ Each integration becomes one container:
   `UC_DISABLE_MDNS_PUBLISH`, `PYTHONUNBUFFERED` (plus your overrides)
 
 Installing resolves an image in this order: pull a prebuilt GHCR image; else build
-from source. Source builds clone the repo to `UC_INSTALLER_DATA/apps/<id>` and, if
-the repo ships its own `Dockerfile`, use that. Otherwise the language is detected
-and a matching build is generated:
+from source. Source builds clone the repo to `UC_INSTALLER_DATA/apps/<id>` and:
+
+1. use the repo's own `Dockerfile` if it ships one;
+2. else use a tuned build for a known language (below);
+3. else — or if a tuned build fails — build with **Nixpacks**, a universal builder
+   that auto-detects the language (Node, Python, Go, Rust, .NET, Java, PHP, Ruby,
+   Deno, and more) and produces a runnable image. Install it with `install.sh` (or
+   `curl -fsSL https://nixpacks.com/install.sh | sudo bash`).
+
+Tuned language builds:
 
 | Detected from | Stack | Build & start |
 | --- | --- | --- |
 | `package.json` | Node / TypeScript | `npm ci` + `npm run build` (if present), start via `npm start` / main / `dist/index.js` |
-| `*.csproj` / `*.sln` | .NET / C# | `dotnet publish -c Release`, run the published DLL |
+| `*.csproj` / `*.sln` | .NET / C# | SDK image auto-matched to the project's target framework, `dotnet publish -c Release`, run the DLL |
 | `Cargo.toml` | Rust | `cargo build --release`, run the produced binary |
 | `go.mod` | Go | `go build`, run the binary |
 | `requirements.txt` / `pyproject.toml` / `*.py` | Python | install deps, run the detected entrypoint |
 
-If none match and there's no Dockerfile, the install fails with a clear message
-rather than assuming Python. The detected stack is shown on the installed row.
+With Nixpacks installed, an integration in any language can be built from source
+when no prebuilt image exists. Without it, the five tuned stacks are still covered;
+anything else fails with a clear message. The build method/stack is shown on the
+installed row.
 
 Four first-party entries in the registry have no public repo; the UI shows them but
 marks them as not installable here.

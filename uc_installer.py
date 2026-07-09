@@ -645,7 +645,7 @@ done
 echo "No Node entrypoint found (no start script, package.json main, or dist/index.js)."; exit 1
 """
 
-DOTNET_DOCKERFILE = r"""FROM mcr.microsoft.com/dotnet/sdk:8.0
+DOTNET_DOCKERFILE = r"""FROM mcr.microsoft.com/dotnet/sdk:__SDK_TAG__
 WORKDIR /src
 COPY . /src
 RUN PROJ=$(ls *.sln 2>/dev/null | head -1); if [ -z "$PROJ" ]; then PROJ=$(find . -name '*.csproj' | head -1); fi; echo "Publishing $PROJ"; dotnet publish "$PROJ" -c Release -o /out
@@ -671,6 +671,41 @@ RUN apk add --no-cache ca-certificates
 COPY --from=build /out/driver /usr/local/bin/driver
 CMD ["/usr/local/bin/driver"]
 """
+
+
+def _dotnet_sdk_tag(app_dir: Path) -> str:
+    """Pick a .NET SDK image tag that can build this project.
+
+    Reads the target framework(s) from every .csproj and any global.json SDK pin,
+    then uses the highest version — an SDK can always build older frameworks, so
+    matching the newest requirement is both necessary and sufficient. Defaults to
+    a recent LTS when nothing is found.
+    """
+    versions: list[tuple[int, int]] = []
+
+    gj = app_dir / "global.json"
+    if gj.exists():
+        try:
+            v = (json.loads(gj.read_text()).get("sdk", {}) or {}).get("version", "") or ""
+            m = re.match(r"(\d+)\.(\d+)", v)
+            if m:
+                versions.append((int(m.group(1)), int(m.group(2))))
+        except Exception:  # noqa: BLE001
+            pass
+
+    for cs in app_dir.glob("**/*.csproj"):
+        try:
+            text = cs.read_text(errors="ignore")
+        except Exception:  # noqa: BLE001
+            continue
+        # matches <TargetFramework>net10.0</TargetFramework> and TargetFrameworks lists
+        for maj, minr in re.findall(r"net(\d+)\.(\d+)", text):
+            versions.append((int(maj), int(minr)))
+
+    if not versions:
+        return "8.0"
+    maj, minr = max(versions)
+    return f"{maj}.{minr}"
 
 
 def detect_stack(app_dir: Path) -> str:
@@ -805,14 +840,73 @@ def _find_repo_dockerfile(app_dir: Path) -> str | None:
     return None
 
 
+def _docker_build(client, app_dir: Path, dockerfile: str, tag: str, job: Job) -> None:
+    for chunk in client.api.build(
+        path=str(app_dir), dockerfile=dockerfile, tag=tag, rm=True, pull=True, decode=True,
+    ):
+        if "stream" in chunk:
+            text = chunk["stream"].strip()
+            if text:
+                job.log(text)
+        elif "error" in chunk:
+            raise RuntimeError(chunk["error"])
+
+
+def _nixpacks_available() -> bool:
+    return shutil.which("nixpacks") is not None
+
+
+def _build_with_nixpacks(app_dir: Path, tag: str, job: Job) -> None:
+    """Universal source build. Nixpacks auto-detects the language (Node, Python,
+    Go, Rust, .NET, Java, PHP, Ruby, Deno, ...) and produces a runnable image."""
+    proc = subprocess.Popen(
+        ["nixpacks", "build", str(app_dir), "--name", tag],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line:
+            job.log(line)
+    if proc.wait() != 0:
+        raise RuntimeError(f"nixpacks exited with code {proc.returncode}")
+
+
+def _prepare_stack_build(app_dir: Path, stack: str, job: Job) -> tuple[str | None, str | None]:
+    """Write a tuned Dockerfile for a known stack. Returns (dockerfile, entrypoint)
+    or (None, None) if the stack isn't one we generate a Dockerfile for."""
+    if stack == "python":
+        (app_dir / "Dockerfile.external").write_text(GENERIC_DOCKERFILE)
+        (app_dir / "docker-entry.external.sh").write_text(GENERIC_ENTRY)
+        entrypoint = detect_entrypoint(app_dir)
+        job.log(f"Detected entrypoint: {entrypoint or '(auto at runtime)'}")
+        return "Dockerfile.external", entrypoint
+    if stack == "node":
+        (app_dir / "Dockerfile.external").write_text(NODE_DOCKERFILE)
+        (app_dir / "uc-entry.node.sh").write_text(NODE_ENTRY)
+        return "Dockerfile.external", None
+    if stack == "dotnet":
+        sdk = _dotnet_sdk_tag(app_dir)
+        job.log(f"Using .NET SDK image mcr.microsoft.com/dotnet/sdk:{sdk}")
+        (app_dir / "Dockerfile.external").write_text(DOTNET_DOCKERFILE.replace("__SDK_TAG__", sdk))
+        return "Dockerfile.external", None
+    if stack == "rust":
+        (app_dir / "Dockerfile.external").write_text(RUST_DOCKERFILE)
+        return "Dockerfile.external", None
+    if stack == "go":
+        (app_dir / "Dockerfile.external").write_text(GO_DOCKERFILE)
+        return "Dockerfile.external", None
+    return None, None
+
+
 def _build_image(entry: dict[str, Any], job: Job,
                  version: str = "latest") -> tuple[str, str | None, str]:
-    """Clone + build. Returns (image_tag, entrypoint, stack).
+    """Clone + build from source. Returns (image_tag, entrypoint, stack).
 
-    Prefers the project's own Dockerfile — its author knows the correct build.
-    Otherwise detects the language (Node/TypeScript, .NET, Rust, Go, Python) and
-    generates a matching Dockerfile. `entrypoint` is only used by the Python
-    generic path; other stacks start via the image's CMD.
+    Order: the project's own Dockerfile → a tuned build for a known language →
+    Nixpacks (universal, any language) as the catch-all and as a fallback when a
+    tuned build fails. This lets *any* integration build from source when no
+    prebuilt image is available, as long as Nixpacks is installed for the long tail.
     """
     integration_id = entry["id"]
     repo = entry["repository"]
@@ -823,56 +917,42 @@ def _build_image(entry: dict[str, Any], job: Job,
     tag = f"uc-local/{integration_id}:{safe}"
     client = get_docker()
 
-    entrypoint: str | None = None
+    # 1) the project's own Dockerfile — the author knows the correct build.
     repo_dockerfile = _find_repo_dockerfile(app_dir)
     if repo_dockerfile:
-        dockerfile = repo_dockerfile
-        stack = "dockerfile"
-        job.log(f"Using the project's own {repo_dockerfile}")
-    else:
-        stack = detect_stack(app_dir)
-        job.log(f"No Dockerfile in repo — detected a {stack} project.")
-        if stack == "python":
-            (app_dir / "Dockerfile.external").write_text(GENERIC_DOCKERFILE)
-            (app_dir / "docker-entry.external.sh").write_text(GENERIC_ENTRY)
-            entrypoint = detect_entrypoint(app_dir)
-            job.log(f"Detected entrypoint: {entrypoint or '(auto at runtime)'}")
-        elif stack == "node":
-            (app_dir / "Dockerfile.external").write_text(NODE_DOCKERFILE)
-            (app_dir / "uc-entry.node.sh").write_text(NODE_ENTRY)
-        elif stack == "dotnet":
-            (app_dir / "Dockerfile.external").write_text(DOTNET_DOCKERFILE)
-        elif stack == "rust":
-            (app_dir / "Dockerfile.external").write_text(RUST_DOCKERFILE)
-        elif stack == "go":
-            (app_dir / "Dockerfile.external").write_text(GO_DOCKERFILE)
-        else:
-            raise RuntimeError(
-                "Couldn't determine how to build this integration. Looked for a "
-                "Dockerfile, package.json (Node/TypeScript), *.csproj/*.sln (.NET), "
-                "Cargo.toml (Rust), go.mod (Go), and requirements.txt/pyproject.toml "
-                "(Python) but found none. Add a Dockerfile to the repository, or "
-                "choose a version that publishes a prebuilt image."
-            )
-        dockerfile = "Dockerfile.external"
+        job.log(f"Using the project's own {repo_dockerfile}. Building {tag} ...")
+        _docker_build(client, app_dir, repo_dockerfile, tag, job)
+        job.log(f"Built {tag}")
+        return tag, None, "dockerfile"
 
-    job.log(f"Building {tag} ...")
-    for chunk in client.api.build(
-        path=str(app_dir),
-        dockerfile=dockerfile,
-        tag=tag,
-        rm=True,
-        pull=True,
-        decode=True,
-    ):
-        if "stream" in chunk:
-            text = chunk["stream"].strip()
-            if text:
-                job.log(text)
-        elif "error" in chunk:
-            raise RuntimeError(chunk["error"])
-    job.log(f"Built {tag}")
-    return tag, entrypoint, stack
+    # 2) tuned build for a known language (UC integrations are mostly these).
+    stack = detect_stack(app_dir)
+    dockerfile, entrypoint = _prepare_stack_build(app_dir, stack, job)
+    if dockerfile is not None:
+        job.log(f"Detected a {stack} project. Building {tag} ...")
+        try:
+            _docker_build(client, app_dir, dockerfile, tag, job)
+            job.log(f"Built {tag}")
+            return tag, entrypoint, stack
+        except Exception as exc:  # noqa: BLE001
+            job.log(f"{stack} build failed: {exc}")
+            if not _nixpacks_available():
+                raise
+            job.log("Retrying with Nixpacks ...")
+
+    # 3) Nixpacks — universal dynamic build for anything else (or a failed tuned build).
+    if _nixpacks_available():
+        job.log("Building automatically with Nixpacks ...")
+        _build_with_nixpacks(app_dir, tag, job)
+        job.log(f"Built {tag} with Nixpacks")
+        return tag, None, "nixpacks"
+
+    raise RuntimeError(
+        "Couldn't build this integration from source. No Dockerfile was found and "
+        f"the language ({stack}) has no built-in recipe. Install Nixpacks on the host "
+        "for automatic builds of any language (Node, Python, Go, Rust, .NET, Java, PHP, "
+        "Ruby, ...), or add a Dockerfile to the repository."
+    )
 
 
 def _run_container(
@@ -1156,6 +1236,7 @@ def health() -> dict[str, Any]:
         "data_dir": str(DATA_DIR),
         "build": current_commit().get("short"),
         "registry_commit": registry_commit(),
+        "nixpacks": _nixpacks_available(),
     }
 
 
