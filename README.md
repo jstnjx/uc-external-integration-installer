@@ -87,9 +87,11 @@ remote. The integration should be running so the remote can connect to it. The
 
 Each installed row shows **which remotes it's registered on** (queried live from the
 remotes, briefly cached), its installed **version**, and an amber **update ▸ vX**
-badge when a newer release exists. Use **Version** to pick a specific release/tag to
-install (or "latest" to track the newest) — versions come from the project's GitHub
-releases/tags, and installing a tag pulls `ghcr.io/…:<tag>` or builds that git ref.
+badge when a newer release exists. Running rows also show live **CPU, memory,
+uptime and health**, and a **Details** panel expands to the full record (image,
+driver id, build stack, install/update timestamps, repository) plus live usage
+(CPU %, memory used/limit, processes, uptime, health, restart count). Stats are
+sampled from Docker in the background and cached, so the UI never blocks on them.
 
 Remote credentials are saved in `UC_INSTALLER_DATA/remotes.json` (file mode `600`,
 plaintext). Keep the data directory private; prefer a per-remote PIN/API key you
@@ -161,6 +163,7 @@ uc-external-integration-installer/
 `GET /api/integrations/{id}/logs?tail=N` · `GET /api/jobs/{job_id}` ·
 `GET /api/update/status` · `POST /api/update/apply` ·
 `GET /api/integrations/{id}/versions` · `GET /api/updates` · `GET /api/registrations` ·
+`GET /api/stats` ·
 `GET/POST /api/remotes` · `PUT/DELETE /api/remotes/{id}` ·
 `POST /api/remotes/{id}/test` · `POST /api/remotes/{id}/register` ·
 `GET /api/remotes/{id}/drivers` · `DELETE /api/remotes/{id}/drivers/{driver_id}`

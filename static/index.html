@@ -210,6 +210,15 @@
   .reg-none { font-family: var(--mono); font-size: 11.5px; color: var(--muted-2) !important; }
 
   .empty { text-align: center; color: var(--muted); padding: 72px 20px; }
+
+  .details { width: 100%; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .det-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 22px; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; font-family: var(--mono);
+    font-size: 12px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+  .kv .k2 { color: var(--muted); white-space: nowrap; }
+  .kv .v2 { color: var(--body-strong); text-align: right; word-break: break-all; }
+  .kv .v2 a { color: var(--yellow); }
+  .btn.det-open { background: var(--elev); border-color: var(--line-2); color: var(--ink); }
   .empty h3 { color: var(--ink); font-weight: 700; margin: 0 0 6px; font-size: 18px; letter-spacing: -.3px; }
 
   /* ---------- token / lock bar ---------- */
@@ -477,6 +486,8 @@ let REGISTRY = { integrations: [], categories: [] };
 let INSTALLED = [];
 let UPDATES = {};   // integration_id -> {update_available, latest_version, installed_version}
 let REGS = {};      // integration_id -> [{remote_id, remote_name}]
+let STATS = {};     // integration_id -> {cpu_pct, mem_used, mem_limit, pids, started_at, health, status}
+const EXPANDED = new Set();  // ids whose details panel is open
 let TAB = 'browse';
 let cfgMode = 'install';   // install | version | config
 let cfgTarget = null;
@@ -601,6 +612,61 @@ function statusLed(s) {
   if (s === 'missing' || s === 'exited' || s === 'dead') return '<span class="led err"></span>';
   return '<span class="led off"></span>';
 }
+function fmtBytes(n) {
+  if (n == null) return '—';
+  const u = ['B','KB','MB','GB','TB']; let i = 0; n = Number(n);
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i];
+}
+function fmtUptime(iso) {
+  if (!iso) return '—';
+  const t = new Date(iso).getTime(); if (!t || t < 0) return '—';
+  let s = Math.max(0, (Date.now() - t) / 1000);
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60);
+  if (d) return d + 'd ' + h + 'h';
+  if (h) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+function healthColor(h) {
+  return h === 'healthy' ? 'var(--emerald)' : h === 'unhealthy' ? 'var(--rose)' : 'var(--amber)';
+}
+function detailsHtml(it) {
+  const s = STATS[it.id] || {};
+  const link = it.repository
+    ? '<a href="' + esc(it.repository) + '" target="_blank" rel="noopener">' + esc(it.repository.replace('https://github.com/','')) + '</a>'
+    : '—';
+  const info = [
+    ['Version', 'v' + esc(it.version || 'latest')],
+    ['Image', esc(it.image || '—')],
+    ['Build', esc((it.source || '—') + (it.stack && it.stack !== 'dockerfile' ? ' · ' + it.stack : ''))],
+    ['Driver id', esc(it.driver_id || '—')],
+    ['Port', esc(String(it.port))],
+    ['Installed', it.installed_at ? new Date(it.installed_at).toLocaleString() : '—'],
+    ['Updated', it.updated_at ? new Date(it.updated_at).toLocaleString() : '—'],
+    ['Repository', link],
+  ];
+  const memStr = s.mem_used != null
+    ? fmtBytes(s.mem_used) + (s.mem_limit ? ' / ' + fmtBytes(s.mem_limit) : '') + (s.mem_pct != null ? ' (' + s.mem_pct + '%)' : '')
+    : '—';
+  const stats = [
+    ['CPU', s.cpu_pct != null ? s.cpu_pct + ' %' : '—'],
+    ['Memory', memStr],
+    ['Processes', s.pids != null ? esc(String(s.pids)) : '—'],
+    ['Uptime', fmtUptime(s.started_at)],
+    ['Health', s.health ? '<span style="color:' + healthColor(s.health) + '">' + esc(s.health) + '</span>' : 'no healthcheck'],
+    ['Restarts', esc(String(it.restart_count || 0))],
+  ];
+  const kv = arr => arr.map(([k, v]) => '<div class="kv"><span class="k2">' + k + '</span><span class="v2">' + v + '</span></div>').join('');
+  return '<div class="eyebrow" style="margin-bottom:8px">Details</div><div class="det-grid">' + kv(info) + '</div>' +
+         '<div class="eyebrow" style="margin:14px 0 8px">Live stats</div><div class="det-grid">' + kv(stats) + '</div>';
+}
+function toggleDetails(id) {
+  if (EXPANDED.has(id)) EXPANDED.delete(id); else { EXPANDED.add(id); loadStats(); }
+  renderInstalled();
+}
+
 function renderInstalled() {
   const box = $('installedRows');
   box.innerHTML = '';
@@ -633,18 +699,29 @@ function renderInstalled() {
         esc(regs.map(r => r.remote_name).join(', ')) + '</span>'
       : '<span class="reg-none">not registered</span>';
 
+    const s = STATS[it.id] || {};
+    let statline = '';
+    if (running && s.cpu_pct != null) {
+      statline =
+        '<span>cpu ' + s.cpu_pct + '%</span>' +
+        '<span>mem ' + fmtBytes(s.mem_used) + '</span>' +
+        '<span>up ' + fmtUptime(s.started_at) + '</span>' +
+        (s.health ? '<span style="color:' + healthColor(s.health) + '">● ' + esc(s.health) + '</span>' : '');
+    }
+
+    const expanded = EXPANDED.has(it.id);
     row.innerHTML =
-      '<div style="min-width:190px">' +
+      '<div style="min-width:190px;flex:1">' +
         '<div class="name">' + esc(it.name) + '</div>' +
         '<div class="meta">' +
           '<span class="status-tag">' + statusLed(it.status) + statusText + '</span>' +
           '<span>port ' + esc(String(it.port)) + '</span>' +
           '<span class="src">' + esc(it.source || '') + (it.stack && it.stack !== 'dockerfile' && it.source !== 'ghcr' ? ' · ' + esc(it.stack) : '') + '</span>' +
-          '<span class="ver">' + esc(ver) + '</span>' +
+          '<span class="ver" title="installed version">v' + esc(ver) + '</span>' +
           updateBadge +
           crashHint +
         '</div>' +
-        '<div class="meta" style="margin-top:4px">' + regBadge + '</div>' +
+        '<div class="meta" style="margin-top:4px">' + regBadge + statline + '</div>' +
       '</div>' +
       '<div class="row-actions">' + toggle +
         '<button class="btn btn-line btn-sm" onclick="lifecycle(\'' + it.id + '\',\'restart\')">Restart</button>' +
@@ -653,10 +730,16 @@ function renderInstalled() {
         '<button class="btn btn-line btn-sm" onclick="openVersion(\'' + it.id + '\')">Version</button>' +
         '<button class="btn btn-line btn-sm" onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
         '<button class="btn btn-line btn-sm" onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
+        '<button class="btn btn-line btn-sm' + (expanded ? ' det-open' : '') + '" onclick="toggleDetails(\'' + it.id + '\')">Details</button>' +
         '<button class="btn btn-danger btn-sm" onclick="removeIntegration(\'' + it.id + '\')">Remove</button>' +
-      '</div>';
+      '</div>' +
+      (expanded ? '<div class="details">' + detailsHtml(it) + '</div>' : '');
     box.appendChild(row);
   });
+}
+
+async function loadStats() {
+  try { STATS = await api('/api/stats'); renderInstalled(); } catch (e) {}
 }
 
 async function lifecycle(id, action) {
@@ -1067,7 +1150,7 @@ function switchTab(t) {
   $('installed').style.display = t === 'installed' ? 'block' : 'none';
   $('tabBrowseBtn').classList.toggle('active', t === 'browse');
   $('tabInstalledBtn').classList.toggle('active', t === 'installed');
-  if (t === 'installed') loadInstalled();
+  if (t === 'installed') { loadInstalled(); loadStats(); }
   if (t === 'browse') renderBrowse();
 }
 function closeModal(id) { $(id).classList.remove('show'); }
@@ -1084,9 +1167,10 @@ async function init() {
   loadRemotes();
   loadUpdates();
   loadRegistrations();
+  loadStats();
   if (installedTimer) clearInterval(installedTimer);
   installedTimer = setInterval(() => {
-    if (!document.querySelector('.modal-back.show')) { loadInstalled(); loadRegistrations(); }
+    if (!document.querySelector('.modal-back.show')) { loadInstalled(); loadRegistrations(); loadStats(); }
   }, 6000);
 }
 init();

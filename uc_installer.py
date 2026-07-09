@@ -1480,6 +1480,107 @@ def api_updates() -> dict[str, Any]:
     return out
 
 
+# ---- live health / usage stats ---------------------------------------------
+
+_stats_cache: dict[str, Any] = {"ts": 0.0, "data": {}, "refreshing": False}
+_stats_lock = threading.Lock()
+
+
+def _cpu_percent(st: dict[str, Any]) -> float:
+    cpu = st.get("cpu_stats", {}) or {}
+    pre = st.get("precpu_stats", {}) or {}
+    cu = (cpu.get("cpu_usage") or {}).get("total_usage", 0)
+    pu = (pre.get("cpu_usage") or {}).get("total_usage", 0)
+    su = cpu.get("system_cpu_usage", 0) or 0
+    ps = pre.get("system_cpu_usage", 0) or 0
+    online = cpu.get("online_cpus") or len((cpu.get("cpu_usage") or {}).get("percpu_usage") or []) or 1
+    cd, sd = cu - pu, su - ps
+    if cd > 0 and sd > 0:
+        return round(cd / sd * online * 100.0, 1)
+    return 0.0
+
+
+def _mem_usage(st: dict[str, Any]) -> tuple[int, int]:
+    m = st.get("memory_stats", {}) or {}
+    usage = m.get("usage", 0) or 0
+    sub = m.get("stats", {}) or {}
+    cache = sub.get("inactive_file", sub.get("cache", 0)) or 0
+    return max(usage - cache, 0), (m.get("limit", 0) or 0)
+
+
+def _compute_stats(container) -> dict[str, Any]:
+    """Two streamed samples give an accurate CPU delta; the 2nd frame already
+    carries precpu_stats from the 1st."""
+    try:
+        gen = container.stats(stream=True, decode=True)
+        next(gen)          # seed frame
+        st = next(gen)     # has precpu populated
+        try:
+            gen.close()
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception:  # noqa: BLE001
+        return {}
+    used, limit = _mem_usage(st)
+    return {
+        "cpu_pct": _cpu_percent(st),
+        "mem_used": used,
+        "mem_limit": limit,
+        "mem_pct": round(used / limit * 100.0, 1) if limit else None,
+        "pids": (st.get("pids_stats") or {}).get("current"),
+    }
+
+
+def _refresh_stats() -> None:
+    try:
+        data: dict[str, Any] = {}
+        running = []
+        for iid in load_state()["integrations"]:
+            c = _container_for(iid)
+            if c is None:
+                data[iid] = {"status": "missing"}
+                continue
+            state = c.attrs.get("State", {}) or {}
+            data[iid] = {
+                "status": c.status,
+                "health": (state.get("Health") or {}).get("Status"),
+                "started_at": state.get("StartedAt"),
+                "restart_count": c.attrs.get("RestartCount", 0),
+            }
+            if c.status == "running":
+                running.append((iid, c))
+        if running:
+            import concurrent.futures as cf
+            with cf.ThreadPoolExecutor(max_workers=min(8, len(running))) as ex:
+                futs = {ex.submit(_compute_stats, c): iid for iid, c in running}
+                for fut in cf.as_completed(futs, timeout=12):
+                    iid = futs[fut]
+                    try:
+                        data[iid].update(fut.result())
+                    except Exception:  # noqa: BLE001
+                        pass
+        with _stats_lock:
+            _stats_cache["data"] = data
+            _stats_cache["ts"] = time.time()
+    finally:
+        with _stats_lock:
+            _stats_cache["refreshing"] = False
+
+
+@app.get("/api/stats", dependencies=[Depends(require_token)])
+def api_stats() -> dict[str, Any]:
+    """Cached per-integration health/usage. Refreshed in the background so the
+    request never blocks on Docker stats sampling."""
+    if not docker_available():
+        return {}
+    with _stats_lock:
+        stale = time.time() - _stats_cache["ts"] > 4
+        if stale and not _stats_cache["refreshing"]:
+            _stats_cache["refreshing"] = True
+            threading.Thread(target=_refresh_stats, daemon=True).start()
+    return _stats_cache["data"]
+
+
 # ---- remotes ---------------------------------------------------------------
 
 # Short cache of each remote's registered driver list, so building the
