@@ -85,6 +85,12 @@ is auto-detected toward the remote, or you can set an explicit advertise IP per
 remote. The integration should be running so the remote can connect to it. The
 **Drivers** button on a remote lists what's registered and lets you unregister.
 
+Each installed row shows **which remotes it's registered on** (queried live from the
+remotes, briefly cached), its installed **version**, and an amber **update ▸ vX**
+badge when a newer release exists. Use **Version** to pick a specific release/tag to
+install (or "latest" to track the newest) — versions come from the project's GitHub
+releases/tags, and installing a tag pulls `ghcr.io/…:<tag>` or builds that git ref.
+
 Remote credentials are saved in `UC_INSTALLER_DATA/remotes.json` (file mode `600`,
 plaintext). Keep the data directory private; prefer a per-remote PIN/API key you
 can revoke over reusing sensitive credentials.
@@ -132,6 +138,7 @@ uc-external-integration-installer/
 `DELETE /api/integrations/{id}?purge=bool` ·
 `GET /api/integrations/{id}/logs?tail=N` · `GET /api/jobs/{job_id}` ·
 `GET /api/update/status` · `POST /api/update/apply` ·
+`GET /api/integrations/{id}/versions` · `GET /api/updates` · `GET /api/registrations` ·
 `GET/POST /api/remotes` · `PUT/DELETE /api/remotes/{id}` ·
 `POST /api/remotes/{id}/test` · `POST /api/remotes/{id}/register` ·
 `GET /api/remotes/{id}/drivers` · `DELETE /api/remotes/{id}/drivers/{driver_id}`

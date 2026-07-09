@@ -345,12 +345,12 @@ def is_installable(entry: dict[str, Any]) -> bool:
     return bool(repo) and repo != PLACEHOLDER_REPO and repo.startswith("http")
 
 
-def image_from_repo(repo: str) -> str:
-    """ghcr.io/<owner>/<name>:latest derived from a GitHub repo url."""
+def image_from_repo(repo: str, tag: str = "latest") -> str:
+    """ghcr.io/<owner>/<name>:<tag> derived from a GitHub repo url."""
     r = repo.strip()
     r = re.sub(r"^https?://github\.com/", "", r)
     r = re.sub(r"\.git$", "", r)
-    return f"ghcr.io/{r.lower()}:latest"
+    return f"ghcr.io/{r.lower()}:{tag or 'latest'}"
 
 
 def owner_repo(repo: str) -> tuple[str, str]:
@@ -358,6 +358,95 @@ def owner_repo(repo: str) -> tuple[str, str]:
     r = re.sub(r"\.git$", "", r)
     parts = r.split("/")
     return (parts[0], parts[1]) if len(parts) >= 2 else ("", r)
+
+
+# ---- integration versions (GitHub releases / tags) -------------------------
+
+_versions_cache: dict[str, dict[str, Any]] = {}
+_versions_lock = threading.Lock()
+_VERSIONS_TTL = 3600  # 1 hour — GitHub's unauthenticated API is rate-limited
+
+
+def _gh(url: str) -> Any:
+    resp = httpx.get(
+        url,
+        headers={"User-Agent": "uc-external-integration-installer",
+                 "Accept": "application/vnd.github+json"},
+        timeout=12.0, follow_redirects=True,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _fetch_repo_versions(owner: str, repo: str) -> list[dict[str, Any]]:
+    """Newest-first list of {tag, published_at, prerelease}. Releases, else tags."""
+    try:
+        releases = _gh(f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=30")
+        out = [
+            {"tag": r["tag_name"], "published_at": r.get("published_at"),
+             "prerelease": r.get("prerelease", False)}
+            for r in releases if r.get("tag_name")
+        ]
+        if out:
+            return out
+    except Exception:
+        pass
+    try:
+        tags = _gh(f"https://api.github.com/repos/{owner}/{repo}/tags?per_page=30")
+        return [{"tag": t["name"], "published_at": None, "prerelease": False}
+                for t in tags if t.get("name")]
+    except Exception:
+        return []
+
+
+def repo_versions(repo: str) -> list[dict[str, Any]]:
+    owner, name = owner_repo(repo)
+    if not owner or not name:
+        return []
+    key = f"{owner}/{name}"
+    now = time.time()
+    with _versions_lock:
+        cached = _versions_cache.get(key)
+        if cached and now - cached["ts"] < _VERSIONS_TTL:
+            return cached["items"]
+    items = _fetch_repo_versions(owner, name)
+    with _versions_lock:
+        _versions_cache[key] = {"ts": now, "items": items}
+    return items
+
+
+def _vkey(tag: str) -> tuple[int, ...]:
+    nums = re.findall(r"\d+", tag or "")
+    return tuple(int(n) for n in nums[:4]) if nums else (0,)
+
+
+def version_gt(a: str, b: str) -> bool:
+    return _vkey(a) > _vkey(b)
+
+
+def compute_update(rec: dict[str, Any]) -> dict[str, Any]:
+    """Given an installed record, determine if a newer version exists."""
+    repo = rec.get("repository") or ""
+    installed = rec.get("version") or "latest"
+    versions = repo_versions(repo)
+    stable = [v for v in versions if not v.get("prerelease")] or versions
+    latest_tag = stable[0]["tag"] if stable else None
+    latest_pub = stable[0].get("published_at") if stable else None
+
+    available = False
+    if latest_tag:
+        if installed in ("latest", "", None):
+            # tracking a moving tag: flag if a release landed after we installed
+            inst_at = rec.get("installed_at")
+            if latest_pub and inst_at:
+                available = latest_pub > inst_at
+        else:
+            available = version_gt(latest_tag, installed)
+    return {
+        "installed_version": installed,
+        "latest_version": latest_tag,
+        "update_available": available,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +580,21 @@ def detect_entrypoint(app_dir: Path) -> str:
     return ""
 
 
-def clone_or_update(repo: str, app_dir: Path, log) -> None:
+def clone_or_update(repo: str, app_dir: Path, log, ref: str | None = None) -> None:
+    pinned = ref and ref != "latest"
+    if pinned:
+        # fresh checkout of a specific tag/branch
+        shutil.rmtree(app_dir, ignore_errors=True)
+        log(f"Cloning {repo} at {ref} ...")
+        app_dir.parent.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(
+            ["git", "clone", "--depth", "1", "--branch", ref, repo, str(app_dir)]
+        )
+        if r.returncode != 0:  # ref may be a non-branch/tag; clone then checkout
+            subprocess.run(["git", "clone", "--depth", "1", repo, str(app_dir)], check=True)
+            subprocess.run(["git", "-C", str(app_dir), "fetch", "--depth", "1", "origin", ref], check=False)
+            subprocess.run(["git", "-C", str(app_dir), "checkout", ref], check=True)
+        return
     if (app_dir / ".git").exists():
         log(f"Updating source in {app_dir.name} ...")
         subprocess.run(["git", "-C", str(app_dir), "pull", "--ff-only"], check=False)
@@ -588,7 +691,7 @@ def _find_repo_dockerfile(app_dir: Path) -> str | None:
     return None
 
 
-def _build_image(entry: dict[str, Any], job: Job) -> tuple[str, str | None]:
+def _build_image(entry: dict[str, Any], job: Job, version: str = "latest") -> tuple[str, str | None]:
     """Clone + build. Returns (image_tag, entrypoint).
 
     Prefers the project's own Dockerfile — its author knows the correct entrypoint,
@@ -599,9 +702,10 @@ def _build_image(entry: dict[str, Any], job: Job) -> tuple[str, str | None]:
     integration_id = entry["id"]
     repo = entry["repository"]
     app_dir = APPS_DIR / integration_id
-    clone_or_update(repo, app_dir, job.log)
+    clone_or_update(repo, app_dir, job.log, ref=version)
 
-    tag = f"uc-local/{integration_id}:latest"
+    safe = re.sub(r"[^a-z0-9_.-]", "-", (version or "latest").lower())
+    tag = f"uc-local/{integration_id}:{safe}"
     client = get_docker()
 
     repo_dockerfile = _find_repo_dockerfile(app_dir)
@@ -639,6 +743,7 @@ def _build_image(entry: dict[str, Any], job: Job) -> tuple[str, str | None]:
 def _run_container(
     entry: dict[str, Any], image: str, source: str, port: int,
     extra_env: dict[str, str], entrypoint: str | None, job: Job,
+    version: str = "latest",
 ):
     integration_id = entry["id"]
     cfg = CONFIG_DIR / integration_id
@@ -674,29 +779,35 @@ def _run_container(
         },
     )
 
+    prev = load_state()["integrations"].get(integration_id, {})
     record_integration({
         "id": integration_id,
         "name": entry.get("name", integration_id),
+        "driver_id": entry.get("driver_id") or integration_id,
         "repository": entry.get("repository", ""),
         "image": image,
         "source": source,
         "port": port,
         "env": extra_env or {},
         "entrypoint": entrypoint or "",
-        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "version": version or "latest",
+        "installed_at": prev.get("installed_at") or datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     })
     job.log("Done.")
 
 
-def do_install(entry: dict[str, Any], port: int, extra_env: dict[str, str], job: Job):
+def do_install(entry: dict[str, Any], port: int, extra_env: dict[str, str],
+               job: Job, version: str = "latest"):
     try:
-        image = image_from_repo(entry["repository"])
+        version = version or "latest"
+        image = image_from_repo(entry["repository"], version)
         source = "ghcr"
         entrypoint = None
         if not _pull_image(image, job):
-            image, entrypoint = _build_image(entry, job)
+            image, entrypoint = _build_image(entry, job, version)
             source = "build"
-        _run_container(entry, image, source, port, extra_env, entrypoint, job)
+        _run_container(entry, image, source, port, extra_env, entrypoint, job, version)
         job.finish("success")
     except Exception as exc:  # noqa: BLE001
         job.finish("error", f"ERROR: {exc}")
@@ -710,7 +821,8 @@ def do_reconfigure(entry: dict[str, Any], port: int, extra_env: dict[str, str], 
         image = rec.get("image") or image_from_repo(entry["repository"])
         source = rec.get("source", "ghcr")
         entrypoint = rec.get("entrypoint") or None
-        _run_container(entry, image, source, port, extra_env, entrypoint, job)
+        version = rec.get("version", "latest")
+        _run_container(entry, image, source, port, extra_env, entrypoint, job, version)
         job.finish("success")
     except Exception as exc:  # noqa: BLE001
         job.finish("error", f"ERROR: {exc}")
@@ -836,6 +948,7 @@ def do_update(job: Job) -> None:
 class InstallBody(BaseModel):
     port: int | None = None
     env: dict[str, str] = {}
+    version: str | None = None
 
 
 class ConfigBody(BaseModel):
@@ -1016,7 +1129,7 @@ def api_install(integration_id: str, body: InstallBody) -> dict[str, str]:
     port = body.port or next_free_port()
     job = new_job("install", integration_id)
     threading.Thread(
-        target=do_install, args=(entry, port, body.env, job), daemon=True
+        target=do_install, args=(entry, port, body.env, job, body.version or "latest"), daemon=True
     ).start()
     return {"job_id": job.id}
 
@@ -1096,7 +1209,81 @@ def api_logs(integration_id: str, tail: int = 300):
     return {"logs": logs}
 
 
+# ---- versions & update detection -------------------------------------------
+
+
+@app.get("/api/integrations/{integration_id}/versions", dependencies=[Depends(require_token)])
+def api_versions(integration_id: str) -> dict[str, Any]:
+    entry = find_integration(integration_id)
+    if entry is None:
+        raise HTTPException(404, "Unknown integration")
+    versions = repo_versions(entry.get("repository", ""))
+    rec = load_state()["integrations"].get(integration_id)
+    return {
+        "current": (rec or {}).get("version"),
+        "installed": rec is not None,
+        # "latest" always offered (moving tag); then the discovered releases/tags
+        "versions": [{"tag": "latest", "published_at": None, "prerelease": False}] + versions,
+    }
+
+
+@app.get("/api/updates", dependencies=[Depends(require_token)])
+def api_updates() -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for integration_id, rec in load_state()["integrations"].items():
+        try:
+            out[integration_id] = compute_update(rec)
+        except Exception:  # noqa: BLE001
+            out[integration_id] = {"update_available": False, "latest_version": None,
+                                   "installed_version": rec.get("version")}
+    return out
+
+
 # ---- remotes ---------------------------------------------------------------
+
+# Short cache of each remote's registered driver list, so building the
+# registration map doesn't hammer the remotes on every page load.
+_remote_drivers_cache: dict[str, dict[str, Any]] = {}
+_remote_drivers_lock = threading.Lock()
+_REMOTE_DRIVERS_TTL = 30
+
+
+def _remote_drivers(remote: dict[str, Any]) -> list[dict[str, Any]]:
+    rid = remote["id"]
+    now = time.time()
+    with _remote_drivers_lock:
+        cached = _remote_drivers_cache.get(rid)
+        if cached and now - cached["ts"] < _REMOTE_DRIVERS_TTL:
+            return cached["items"]
+    items: list[dict[str, Any]] = []
+    try:
+        r = remote_request(remote, "GET", "/intg/drivers", timeout=8.0)
+        if r.status_code < 400 and r.headers.get("content-type", "").startswith("application/json"):
+            data = r.json()
+            if isinstance(data, list):
+                items = data
+    except Exception:  # noqa: BLE001
+        items = []
+    with _remote_drivers_lock:
+        _remote_drivers_cache[rid] = {"ts": now, "items": items}
+    return items
+
+
+@app.get("/api/registrations", dependencies=[Depends(require_token)])
+def api_registrations() -> dict[str, list[dict[str, str]]]:
+    """Map of installed integration id -> the remotes it's registered on."""
+    remotes = load_remotes()["remotes"]
+    state = load_state()["integrations"]
+    result: dict[str, list[dict[str, str]]] = {iid: [] for iid in state}
+    for rid, remote in remotes.items():
+        present = {
+            d.get("driver_id") for d in _remote_drivers(remote) if isinstance(d, dict)
+        }
+        for iid, rec in state.items():
+            driver_id = rec.get("driver_id") or (find_integration(iid) or {}).get("driver_id") or iid
+            if driver_id in present:
+                result[iid].append({"remote_id": rid, "remote_name": remote.get("name", rid)})
+    return result
 
 
 def _get_remote_or_404(rid: str) -> dict[str, Any]:
@@ -1227,6 +1414,8 @@ def api_remotes_register(rid: str, body: RegisterBody) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Could not reach remote: {exc}")
     if r.status_code in (200, 201):
+        with _remote_drivers_lock:
+            _remote_drivers_cache.pop(rid, None)
         return {"ok": True, "driver_id": payload["driver_id"], "driver_url": payload["driver_url"]}
     if r.status_code == 401:
         raise HTTPException(401, "Authentication failed — check the PIN or API key")
@@ -1243,6 +1432,8 @@ def api_remotes_unregister(rid: str, driver_id: str) -> dict[str, str]:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Could not reach remote: {exc}")
     if r.status_code in (200, 204):
+        with _remote_drivers_lock:
+            _remote_drivers_cache.pop(rid, None)
         return {"status": "unregistered", "driver_id": driver_id}
     raise HTTPException(502, f"Remote returned {r.status_code}")
 

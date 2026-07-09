@@ -148,6 +148,13 @@
   .row-actions { display: flex; gap: 7px; margin-left: auto; flex-wrap: wrap; }
   .src { color: var(--amber) !important; }
 
+  .row .meta .ver { color: var(--muted); }
+  .upd-badge { font-family: var(--mono); font-size: 11.5px; color: var(--amber);
+    border: 1px solid var(--amber-dim); border-radius: 5px; padding: 1px 7px; cursor: pointer; }
+  .upd-badge:hover { background: rgba(242,163,60,.1); }
+  .reg-badge { font-family: var(--mono); font-size: 11.5px; color: var(--cyan); }
+  .reg-none { font-family: var(--mono); font-size: 11.5px; color: var(--muted-2); }
+
   .updbtn { appearance: none; background: transparent; border: 1px solid transparent;
     color: var(--muted); cursor: pointer; border-radius: 7px; padding: 4px 8px; }
   .updbtn:hover { border-color: var(--border); color: var(--text); }
@@ -304,6 +311,11 @@
       <button class="x" onclick="closeModal('cfgBack')">×</button>
     </header>
     <div class="body">
+      <div class="field" id="cfgVersionField">
+        <label>Version</label>
+        <select id="cfgVersion" class="mono" style="width:100%"></select>
+        <div class="hint">Which release to install. "latest" tracks the newest build; a specific tag pins it.</div>
+      </div>
       <div class="field">
         <label>Integration port</label>
         <input id="cfgPort" class="mono" placeholder="auto" />
@@ -401,8 +413,10 @@
 const $ = (id) => document.getElementById(id);
 let REGISTRY = { integrations: [], categories: [] };
 let INSTALLED = [];
+let UPDATES = {};   // integration_id -> {update_available, latest_version, installed_version}
+let REGS = {};      // integration_id -> [{remote_id, remote_name}]
 let TAB = 'browse';
-let cfgMode = 'install';   // install | config
+let cfgMode = 'install';   // install | version | config
 let cfgTarget = null;
 let installedTimer = null;
 let logTarget = null;
@@ -513,6 +527,12 @@ async function loadInstalled() {
     if (TAB === 'browse') renderBrowse();
   } catch (e) {}
 }
+async function loadUpdates() {
+  try { UPDATES = await api('/api/updates'); renderInstalled(); } catch (e) {}
+}
+async function loadRegistrations() {
+  try { REGS = await api('/api/registrations'); renderInstalled(); } catch (e) {}
+}
 function statusLed(s) {
   if (s === 'running') return '<span class="led on running-pulse"></span>';
   if (s === 'restarting') return '<span class="led warn"></span>';
@@ -538,6 +558,19 @@ function renderInstalled() {
     const statusText = esc(it.status) + (rc ? ' ×' + rc : '');
     const crashHint = looping
       ? '<span style="color:var(--red)">crash-looping — check Logs</span>' : '';
+
+    const ver = it.version || 'latest';
+    const upd = UPDATES[it.id] || {};
+    const updateBadge = upd.update_available
+      ? '<span class="upd-badge" onclick="openVersion(\'' + it.id + '\')" title="Install the newer version">update ▸ ' +
+        esc(upd.latest_version || '') + '</span>'
+      : '';
+    const regs = REGS[it.id] || [];
+    const regBadge = regs.length
+      ? '<span class="reg-badge" title="Registered on these remotes">◎ ' +
+        esc(regs.map(r => r.remote_name).join(', ')) + '</span>'
+      : '<span class="reg-none">not registered</span>';
+
     row.innerHTML =
       '<div style="min-width:190px">' +
         '<div class="name">' + esc(it.name) + '</div>' +
@@ -545,13 +578,17 @@ function renderInstalled() {
           '<span class="status-tag">' + statusLed(it.status) + statusText + '</span>' +
           '<span>port ' + esc(String(it.port)) + '</span>' +
           '<span class="src">' + esc(it.source || '') + '</span>' +
+          '<span class="ver">' + esc(ver) + '</span>' +
+          updateBadge +
           crashHint +
         '</div>' +
+        '<div class="meta" style="margin-top:4px">' + regBadge + '</div>' +
       '</div>' +
       '<div class="row-actions">' + toggle +
         '<button class="btn btn-line btn-sm" onclick="lifecycle(\'' + it.id + '\',\'restart\')">Restart</button>' +
         '<button class="btn btn-line btn-sm" onclick="openLogs(\'' + it.id + '\')">Logs</button>' +
         '<button class="btn btn-line btn-sm" onclick="registerIntegration(\'' + it.id + '\')" title="Register on the active remote">Register</button>' +
+        '<button class="btn btn-line btn-sm" onclick="openVersion(\'' + it.id + '\')">Version</button>' +
         '<button class="btn btn-line btn-sm" onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
         '<button class="btn btn-line btn-sm" onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
         '<button class="btn btn-danger btn-sm" onclick="removeIntegration(\'' + it.id + '\')">Remove</button>' +
@@ -597,6 +634,24 @@ function addEnvRow(k, v) {
                   '<button class="btn btn-line btn-sm" onclick="this.parentElement.remove()">✕</button>';
   $('envList').appendChild(row);
 }
+async function loadVersionOptions(id, selected) {
+  const sel = $('cfgVersion');
+  sel.innerHTML = '<option>loading…</option>';
+  try {
+    const data = await api('/api/integrations/' + id + '/versions');
+    const seen = new Set();
+    sel.innerHTML = '';
+    (data.versions || []).forEach(v => {
+      if (seen.has(v.tag)) return; seen.add(v.tag);
+      const label = v.tag + (v.prerelease ? ' (pre-release)' : '');
+      const o = document.createElement('option');
+      o.value = v.tag; o.textContent = label;
+      if (v.tag === (selected || 'latest')) o.selected = true;
+      sel.appendChild(o);
+    });
+    if (!sel.options.length) sel.innerHTML = '<option value="latest">latest</option>';
+  } catch (e) { sel.innerHTML = '<option value="latest">latest</option>'; }
+}
 function openInstall(id) {
   const it = REGISTRY.integrations.find(x => x.id === id); if (!it) return;
   cfgMode = 'install'; cfgTarget = id;
@@ -604,8 +659,23 @@ function openInstall(id) {
   $('cfgSub').textContent = id;
   $('cfgPort').value = '';
   $('envList').innerHTML = '';
+  $('cfgVersionField').style.display = 'block';
   $('cfgSubmit').textContent = 'Install';
   $('cfgBack').classList.add('show');
+  loadVersionOptions(id, 'latest');
+}
+function openVersion(id) {
+  const it = INSTALLED.find(x => x.id === id); if (!it) return;
+  cfgMode = 'version'; cfgTarget = id;
+  $('cfgTitle').textContent = 'Change version — ' + it.name;
+  $('cfgSub').textContent = id;
+  $('cfgPort').value = it.port || '';
+  $('envList').innerHTML = '';
+  Object.entries(it.env || {}).forEach(([k, v]) => addEnvRow(k, v));
+  $('cfgVersionField').style.display = 'block';
+  $('cfgSubmit').textContent = 'Install version';
+  $('cfgBack').classList.add('show');
+  loadVersionOptions(id, it.version || 'latest');
 }
 function openConfig(id) {
   const it = INSTALLED.find(x => x.id === id); if (!it) return;
@@ -615,6 +685,7 @@ function openConfig(id) {
   $('cfgPort').value = it.port || '';
   $('envList').innerHTML = '';
   Object.entries(it.env || {}).forEach(([k, v]) => addEnvRow(k, v));
+  $('cfgVersionField').style.display = 'none';   // reconfigure reuses the image
   $('cfgSubmit').textContent = 'Apply & restart';
   $('cfgBack').classList.add('show');
 }
@@ -622,13 +693,16 @@ async function submitConfig() {
   const body = { env: envRows() };
   const p = $('cfgPort').value.trim();
   if (p) body.port = parseInt(p, 10);
-  const path = cfgMode === 'install'
+  const isInstall = cfgMode === 'install' || cfgMode === 'version';
+  if (isInstall) body.version = $('cfgVersion').value || 'latest';
+  const path = isInstall
     ? '/api/integrations/' + cfgTarget + '/install'
     : '/api/integrations/' + cfgTarget + '/config';
+  const verb = cfgMode === 'install' ? 'Installing ' : cfgMode === 'version' ? 'Switching ' : 'Reconfiguring ';
   try {
     const { job_id } = await api(path, { method: 'POST', body: JSON.stringify(body) });
     closeModal('cfgBack');
-    followJob(job_id, cfgMode === 'install' ? 'Installing ' + cfgTarget : 'Reconfiguring ' + cfgTarget);
+    followJob(job_id, verb + cfgTarget);
   } catch (e) { toast(e.message, 'bad'); }
 }
 
@@ -650,7 +724,7 @@ function followJob(jobId, title) {
     $('jobSub').innerHTML = job.status === 'success' ? '✓ complete' : '✕ failed';
     $('jobClose').style.display = 'block';
     $('jobDone').style.display = 'block';
-    if (job.status === 'success') { toast(title.split(' ')[0] + ' complete', 'ok'); loadInstalled(); }
+    if (job.status === 'success') { toast(title.split(' ')[0] + ' complete', 'ok'); loadInstalled(); loadUpdates(); loadRegistrations(); }
     else toast('Job failed — see log', 'bad');
   };
   poll();
@@ -847,6 +921,7 @@ async function unregisterDriver(rid, driverId) {
   if (!confirm('Unregister ' + driverId + ' from this remote?')) return;
   try { await api('/api/remotes/' + rid + '/drivers/' + encodeURIComponent(driverId), { method: 'DELETE' });
     toast('Unregistered ' + driverId, 'ok'); viewDrivers(rid); viewDrivers(rid);
+    setTimeout(loadRegistrations, 500);
   } catch (e) { toast(e.message, 'bad'); }
 }
 function editRemote(rid) {
@@ -905,6 +980,7 @@ async function registerIntegration(id) {
       method: 'POST', body: JSON.stringify({ integration_id: id }),
     });
     toast('Registered ' + res.driver_id + ' (' + res.driver_url + ')', 'ok');
+    setTimeout(loadRegistrations, 500);
   } catch (e) { toast('Register failed: ' + e.message, 'bad'); }
 }
 
@@ -929,8 +1005,12 @@ async function init() {
   await loadInstalled();
   loadUpdateStatus();
   loadRemotes();
+  loadUpdates();
+  loadRegistrations();
   if (installedTimer) clearInterval(installedTimer);
-  installedTimer = setInterval(() => { if (!document.querySelector('.modal-back.show')) loadInstalled(); }, 6000);
+  installedTimer = setInterval(() => {
+    if (!document.querySelector('.modal-back.show')) { loadInstalled(); loadRegistrations(); }
+  }, 6000);
 }
 init();
 </script>
