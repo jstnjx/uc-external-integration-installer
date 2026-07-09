@@ -234,6 +234,41 @@ def remote_request(remote: dict[str, Any], method: str, path: str,
     )
 
 
+def remote_all_drivers(remote: dict[str, Any], driver_type: str | None = None,
+                       timeout: float = 10.0) -> list[dict[str, Any]]:
+    """Fetch the remote's full driver list.
+
+    GET /intg/drivers defaults to limit=10, so an unpaginated call only returns
+    the first 10 (which are the pre-installed LOCAL drivers) and hides EXTERNAL
+    drivers we register. Page through with the max limit until we've collected
+    Pagination-Count items.
+    """
+    out: list[dict[str, Any]] = []
+    page = 1
+    while page <= 30:  # hard safety cap
+        path = f"/intg/drivers?limit=100&page={page}"
+        if driver_type:
+            path += f"&driver_type={driver_type}"
+        r = remote_request(remote, "GET", path, timeout=timeout)
+        if r.status_code >= 400:
+            break
+        try:
+            data = r.json()
+        except Exception:  # noqa: BLE001
+            break
+        if not isinstance(data, list) or not data:
+            break
+        out.extend(data)
+        try:
+            total = int(r.headers.get("Pagination-Count", len(out)))
+        except (TypeError, ValueError):
+            total = len(out)
+        if len(out) >= total:
+            break
+        page += 1
+    return out
+
+
 def build_driver_payload(entry: dict[str, Any], rec: dict[str, Any],
                          advertise_ip: str, port: int) -> dict[str, Any]:
     driver_id = (entry.get("driver_id") or rec.get("id") or entry.get("id"))
@@ -1257,11 +1292,7 @@ def _remote_drivers(remote: dict[str, Any]) -> list[dict[str, Any]]:
             return cached["items"]
     items: list[dict[str, Any]] = []
     try:
-        r = remote_request(remote, "GET", "/intg/drivers", timeout=8.0)
-        if r.status_code < 400 and r.headers.get("content-type", "").startswith("application/json"):
-            data = r.json()
-            if isinstance(data, list):
-                items = data
+        items = remote_all_drivers(remote, timeout=8.0)
     except Exception:  # noqa: BLE001
         items = []
     with _remote_drivers_lock:
@@ -1371,26 +1402,25 @@ def api_remotes_active(body: ActiveRemoteBody) -> dict[str, Any]:
 def api_remotes_test(rid: str) -> dict[str, Any]:
     remote = _get_remote_or_404(rid)
     try:
-        r = remote_request(remote, "GET", "/intg/drivers", timeout=10.0)
+        r = remote_request(remote, "GET", "/intg/drivers?limit=1", timeout=10.0)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Could not reach remote: {exc}")
     if r.status_code == 401:
         raise HTTPException(401, "Authentication failed — check the PIN or API key")
     if r.status_code >= 400:
         raise HTTPException(502, f"Remote returned {r.status_code}")
-    drivers = r.json() if r.headers.get("content-type", "").startswith("application/json") else []
-    return {"ok": True, "driver_count": len(drivers) if isinstance(drivers, list) else None}
+    try:
+        total = int(r.headers.get("Pagination-Count"))
+    except (TypeError, ValueError):
+        total = None
+    return {"ok": True, "driver_count": total}
 
 
 @app.get("/api/remotes/{rid}/drivers", dependencies=[Depends(require_token)])
 def api_remotes_drivers(rid: str) -> Any:
     remote = _get_remote_or_404(rid)
     try:
-        r = remote_request(remote, "GET", "/intg/drivers", timeout=10.0)
-        r.raise_for_status()
-        return r.json()
-    except HTTPException:
-        raise
+        return remote_all_drivers(remote)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Remote error: {exc}")
 
