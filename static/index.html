@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UC External Integration Installer</title>
+<style>
+  :root {
+    --bg: #0f1216;
+    --panel: #171b21;
+    --panel-2: #1c222a;
+    --panel-3: #232a33;
+    --border: #2b323c;
+    --border-soft: #232932;
+    --text: #e7ecf2;
+    --muted: #8b95a3;
+    --muted-2: #626b78;
+    --amber: #f2a33c;
+    --amber-dim: #b9781f;
+    --cyan: #35c2c9;
+    --cyan-dim: #1c6e72;
+    --red: #e5484d;
+    --green: #4bb673;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --radius: 12px;
+    --shadow: 0 12px 40px rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(242,163,60,.06), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.5;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: var(--mono); }
+  a { color: var(--amber); }
+
+  /* ---- header / control panel ---- */
+  header.bar {
+    position: sticky; top: 0; z-index: 20;
+    background: linear-gradient(180deg, #1b2028, #14181e);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px rgba(0,0,0,.35);
+  }
+  .bar-inner {
+    max-width: 1180px; margin: 0 auto; padding: 14px 22px;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; margin-right: auto; }
+  .logo {
+    width: 34px; height: 34px; border-radius: 9px; flex: none;
+    background: linear-gradient(160deg, #2a3038, #171b21);
+    border: 1px solid var(--border);
+    display: grid; place-items: center;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.4);
+  }
+  .logo span { width: 12px; height: 12px; border-radius: 50%;
+    background: var(--amber); box-shadow: 0 0 10px 1px rgba(242,163,60,.7); }
+  .brand h1 { font-size: 16px; letter-spacing: .2px; margin: 0; font-weight: 650; }
+  .brand p { margin: 0; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+
+  .status-cluster { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .stat { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); font-family: var(--mono); }
+  .led { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); flex: none; }
+  .led.on { background: var(--cyan); box-shadow: 0 0 8px 1px rgba(53,194,201,.75); }
+  .led.warn { background: var(--amber); box-shadow: 0 0 8px 1px rgba(242,163,60,.7); }
+  .led.off { background: #444b55; }
+  .led.err { background: var(--red); box-shadow: 0 0 8px 1px rgba(229,72,77,.7); }
+
+  /* ---- layout ---- */
+  main { max-width: 1180px; margin: 0 auto; padding: 24px 22px 80px; }
+
+  .tabs { display: inline-flex; padding: 4px; gap: 4px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px; margin-bottom: 22px; }
+  .tab { appearance: none; border: 0; background: transparent; color: var(--muted);
+    font-family: var(--sans); font-size: 14px; font-weight: 550; padding: 8px 18px;
+    border-radius: 7px; cursor: pointer; transition: all .15s; }
+  .tab.active { background: var(--panel-3); color: var(--text); box-shadow: 0 1px 0 rgba(255,255,255,.04) inset; }
+  .tab:hover:not(.active) { color: var(--text); }
+  .tab .count { color: var(--amber); font-family: var(--mono); font-size: 12px; margin-left: 6px; }
+
+  .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+  .search { flex: 1 1 260px; min-width: 200px; position: relative; }
+  .search input, select.filter {
+    width: 100%; background: var(--panel); border: 1px solid var(--border);
+    color: var(--text); border-radius: 9px; padding: 10px 12px; font-size: 14px;
+    font-family: var(--sans); outline: none; transition: border-color .15s; }
+  .search input:focus, select.filter:focus { border-color: var(--amber-dim); }
+  select.filter { flex: 0 0 auto; width: auto; min-width: 190px; cursor: pointer; }
+  .btn-ghost { background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 14px; border-radius: 9px; cursor: pointer; font-size: 13.5px; font-weight: 550; }
+  .btn-ghost:hover { border-color: var(--muted-2); }
+
+  /* ---- browse grid ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 16px 14px; display: flex; flex-direction: column; gap: 10px;
+    transition: border-color .15s, transform .15s; }
+  .card:hover { border-color: #3a434f; transform: translateY(-1px); }
+  .card.disabled { opacity: .55; }
+  .card-head { display: flex; align-items: flex-start; gap: 10px; }
+  .card-title { font-size: 15.5px; font-weight: 640; margin: 0; }
+  .card-dev { font-size: 12px; color: var(--muted); font-family: var(--mono); margin-top: 2px; }
+  .badge { font-size: 10.5px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .4px;
+    padding: 3px 7px; border-radius: 5px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  .badge.official { color: var(--cyan); border-color: var(--cyan-dim); }
+  .badge.installed { color: var(--green); border-color: #2f6a45; }
+  .card-desc { font-size: 13px; color: var(--muted); margin: 0; flex: 1 0 auto;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: 11px; font-family: var(--mono); color: var(--muted-2);
+    background: var(--panel-3); border-radius: 5px; padding: 2px 7px; }
+  .card-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .spacer { flex: 1; }
+
+  .btn { appearance: none; border: 0; border-radius: 9px; cursor: pointer;
+    font-size: 13.5px; font-weight: 600; padding: 9px 15px; font-family: var(--sans);
+    transition: filter .15s, background .15s; }
+  .btn-primary { background: var(--amber); color: #201203; }
+  .btn-primary:hover { filter: brightness(1.07); }
+  .btn-primary:disabled { background: var(--panel-3); color: var(--muted-2); cursor: not-allowed; filter: none; }
+  .btn-sm { padding: 6px 11px; font-size: 12.5px; }
+  .btn-line { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-line:hover { border-color: var(--muted-2); }
+  .btn-danger { background: transparent; border: 1px solid #5a2b2d; color: var(--red); }
+  .btn-danger:hover { background: rgba(229,72,77,.08); }
+
+  /* ---- installed rows ---- */
+  .rows { display: flex; flex-direction: column; gap: 10px; }
+  .row {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .row .name { font-weight: 620; font-size: 15px; }
+  .row .meta { display: flex; gap: 14px; align-items: center; margin-top: 3px; flex-wrap: wrap; }
+  .row .meta span { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .status-tag { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono);
+    font-size: 12px; color: var(--muted); }
+  .row-actions { display: flex; gap: 7px; margin-left: auto; flex-wrap: wrap; }
+  .src { color: var(--amber) !important; }
+
+  .updbtn { appearance: none; background: transparent; border: 1px solid transparent;
+    color: var(--muted); cursor: pointer; border-radius: 7px; padding: 4px 8px; }
+  .updbtn:hover { border-color: var(--border); color: var(--text); }
+  .updbtn.available { color: var(--amber); border-color: var(--amber-dim); }
+  .updbtn.available .led { background: var(--amber); box-shadow: 0 0 8px 1px rgba(242,163,60,.7); }
+
+  .empty { text-align: center; color: var(--muted); padding: 60px 20px; }
+  .empty h3 { color: var(--text); font-weight: 620; margin: 0 0 6px; }
+
+  /* ---- token bar ---- */
+  .lockbar { display: none; align-items: center; gap: 12px; background: var(--panel-2);
+    border: 1px solid var(--amber-dim); border-radius: 10px; padding: 12px 14px; margin-bottom: 20px; }
+  .lockbar.show { display: flex; }
+  .lockbar input { flex: 1; background: var(--panel); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 8px 11px; font-family: var(--mono); }
+
+  /* ---- modal ---- */
+  .modal-back { position: fixed; inset: 0; background: rgba(6,8,11,.68); backdrop-filter: blur(3px);
+    display: none; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+  .modal-back.show { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    width: min(680px, 100%); max-height: 86vh; display: flex; flex-direction: column;
+    box-shadow: var(--shadow); animation: pop .16s ease-out; }
+  @keyframes pop { from { transform: translateY(8px) scale(.99); opacity: 0; } to { transform: none; opacity: 1; } }
+  .modal header { padding: 16px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; }
+  .modal header h2 { margin: 0; font-size: 15.5px; font-weight: 640; }
+  .modal header .sub { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .modal .body { padding: 18px; overflow: auto; }
+  .modal .foot { padding: 14px 18px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
+  .x { margin-left: auto; background: transparent; border: 0; color: var(--muted); font-size: 20px; cursor: pointer; line-height: 1; }
+
+  .console { background: #0b0e12; border: 1px solid var(--border); border-radius: 9px;
+    padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.55;
+    white-space: pre-wrap; word-break: break-word; color: #c9d3df; max-height: 46vh; overflow: auto; }
+  .console .err { color: var(--red); }
+
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; font-weight: 550; }
+  .field input { width: 100%; background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 9px 11px; font-family: var(--mono); font-size: 13px; }
+  .env-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .env-row input { flex: 1; background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 8px 10px; font-family: var(--mono); font-size: 12.5px; }
+  .env-row button { flex: none; }
+  .hint { font-size: 12px; color: var(--muted-2); margin-top: 4px; }
+
+  .spin { width: 15px; height: 15px; border: 2px solid var(--border); border-top-color: var(--amber);
+    border-radius: 50%; animation: sp .7s linear infinite; display: inline-block; vertical-align: -2px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+
+  /* ---- toast ---- */
+  #toasts { position: fixed; bottom: 22px; right: 22px; z-index: 80; display: flex; flex-direction: column; gap: 10px; }
+  .toast { background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--amber);
+    padding: 12px 16px; border-radius: 9px; font-size: 13.5px; box-shadow: var(--shadow);
+    animation: slidein .2s ease-out; max-width: 340px; }
+  .toast.ok { border-left-color: var(--green); }
+  .toast.bad { border-left-color: var(--red); }
+  @keyframes slidein { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  .running-pulse { animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 6px 0 rgba(53,194,201,.5); } 50% { box-shadow: 0 0 12px 2px rgba(53,194,201,.85); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  @media (max-width: 560px) {
+    .row-actions { margin-left: 0; width: 100%; }
+    .bar-inner { padding: 12px 16px; }
+    main { padding: 18px 16px 70px; }
+  }
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="bar-inner">
+    <div class="brand">
+      <div class="logo"><span></span></div>
+      <div>
+        <h1>UC External Integration Installer</h1>
+        <p id="brandSub">external integrations · docker host</p>
+      </div>
+    </div>
+    <div class="status-cluster" id="statusCluster">
+      <div class="stat"><span class="led" id="ledDocker"></span> docker</div>
+      <div class="stat"><span class="led" id="ledReg"></span> <span id="regInfo">registry</span></div>
+      <button class="stat updbtn" id="updBtn" onclick="openUpdate()" title="Updates">
+        <span class="led" id="ledUpd"></span> <span id="updInfo">build …</span></button>
+      <div class="stat" id="lockStat" style="display:none"><span class="led warn"></span> locked</div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="lockbar" id="lockbar">
+    <span class="led warn"></span>
+    <span style="font-size:13.5px">This installer requires a token to control Docker.</span>
+    <input id="tokenInput" type="password" placeholder="Access token" />
+    <button class="btn btn-primary btn-sm" onclick="saveToken()">Unlock</button>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" id="tabBrowseBtn" onclick="switchTab('browse')">Browse
+      <span class="count" id="browseCount"></span></button>
+    <button class="tab" id="tabInstalledBtn" onclick="switchTab('installed')">Installed
+      <span class="count" id="installedCount"></span></button>
+  </div>
+
+  <!-- BROWSE -->
+  <section id="browse">
+    <div class="toolbar">
+      <div class="search"><input id="searchInput" placeholder="Search integrations or developers…" oninput="renderBrowse()" /></div>
+      <select class="filter" id="catFilter" onchange="renderBrowse()"><option value="">All categories</option></select>
+      <button class="btn-ghost" onclick="refreshRegistry()">Refresh registry</button>
+    </div>
+    <div class="grid" id="browseGrid"></div>
+  </section>
+
+  <!-- INSTALLED -->
+  <section id="installed" style="display:none">
+    <div class="rows" id="installedRows"></div>
+  </section>
+</main>
+
+<!-- CONFIG / INSTALL MODAL -->
+<div class="modal-back" id="cfgBack">
+  <div class="modal">
+    <header>
+      <h2 id="cfgTitle">Install</h2><span class="sub" id="cfgSub"></span>
+      <button class="x" onclick="closeModal('cfgBack')">×</button>
+    </header>
+    <div class="body">
+      <div class="field">
+        <label>Integration port</label>
+        <input id="cfgPort" class="mono" placeholder="auto" />
+        <div class="hint">The HTTP port the integration advertises on the host network. Leave blank to auto-assign.</div>
+      </div>
+      <div class="field">
+        <label>Environment variables</label>
+        <div id="envList"></div>
+        <button class="btn btn-line btn-sm" onclick="addEnvRow()">+ Add variable</button>
+        <div class="hint">Extra variables passed to the container (e.g. device IPs, credentials). Base UC_* variables are set automatically.</div>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="btn btn-line" onclick="closeModal('cfgBack')">Cancel</button>
+      <button class="btn btn-primary" id="cfgSubmit" onclick="submitConfig()">Install</button>
+    </div>
+  </div>
+</div>
+
+<!-- JOB / PROGRESS MODAL -->
+<div class="modal-back" id="jobBack">
+  <div class="modal">
+    <header>
+      <h2 id="jobTitle">Working…</h2><span class="sub" id="jobSub"><span class="spin"></span></span>
+      <button class="x" id="jobClose" onclick="closeModal('jobBack')" style="display:none">×</button>
+    </header>
+    <div class="body"><div class="console" id="jobConsole"></div></div>
+    <div class="foot"><button class="btn btn-primary" id="jobDone" style="display:none" onclick="closeJob()">Done</button></div>
+  </div>
+</div>
+
+<!-- UPDATE MODAL -->
+<div class="modal-back" id="updBack">
+  <div class="modal">
+    <header>
+      <h2>Software update</h2><span class="sub" id="updRepo"></span>
+      <button class="x" onclick="closeModal('updBack')">×</button>
+    </header>
+    <div class="body">
+      <div id="updBodyContent"></div>
+    </div>
+    <div class="foot">
+      <button class="btn btn-line" onclick="checkUpdate()">Check again</button>
+      <button class="btn btn-primary" id="updApplyBtn" onclick="applyUpdate()">Update &amp; restart</button>
+    </div>
+  </div>
+</div>
+
+<!-- LOGS MODAL -->
+<div class="modal-back" id="logBack">
+  <div class="modal">
+    <header>
+      <h2>Logs</h2><span class="sub" id="logSub"></span>
+      <button class="btn btn-line btn-sm" style="margin-left:auto" onclick="refreshLogs()">Refresh</button>
+      <button class="x" onclick="closeModal('logBack')">×</button>
+    </header>
+    <div class="body"><div class="console" id="logConsole" style="max-height:60vh"></div></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let REGISTRY = { integrations: [], categories: [] };
+let INSTALLED = [];
+let TAB = 'browse';
+let cfgMode = 'install';   // install | config
+let cfgTarget = null;
+let installedTimer = null;
+let logTarget = null;
+
+function token() { return localStorage.getItem('uc_token') || ''; }
+function headers(extra) {
+  const h = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
+  if (token()) h['Authorization'] = 'Bearer ' + token();
+  return h;
+}
+async function api(path, opts) {
+  const res = await fetch(path, Object.assign({ headers: headers() }, opts || {}));
+  if (res.status === 401) { $('lockbar').classList.add('show'); throw new Error('Unauthorized'); }
+  if (!res.ok) { let d = ''; try { d = (await res.json()).detail; } catch(e){} throw new Error(d || ('HTTP ' + res.status)); }
+  return res.status === 204 ? null : res.json();
+}
+
+function toast(msg, kind) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (kind || '');
+  t.textContent = msg;
+  $('toasts').appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 300); }, 3200);
+}
+
+function saveToken() {
+  const v = $('tokenInput').value.trim();
+  if (!v) return;
+  localStorage.setItem('uc_token', v);
+  $('lockbar').classList.remove('show');
+  init();
+}
+
+// ---- health / status ----
+async function loadHealth() {
+  try {
+    const h = await (await fetch('/api/health')).json();
+    $('ledDocker').className = 'led ' + (h.docker ? 'on' : 'err');
+    $('ledReg').className = 'led ' + (h.registry_ok ? 'on' : 'err');
+    $('regInfo').textContent = h.registry_ok ? ('registry v' + (h.registry_version || '?')) : 'registry down';
+    if (h.token_required) { $('lockStat').style.display = 'flex'; if (!token()) $('lockbar').classList.add('show'); }
+    $('brandSub').textContent = 'external integrations · port ' + h.port_start + '+';
+    return h;
+  } catch (e) { return {}; }
+}
+
+// ---- browse ----
+async function loadRegistry(refresh) {
+  REGISTRY = await api('/api/registry' + (refresh ? '?refresh=true' : ''));
+  const sel = $('catFilter');
+  sel.innerHTML = '<option value="">All categories</option>';
+  (REGISTRY.categories || []).forEach(c => {
+    const o = document.createElement('option'); o.value = c.id; o.textContent = c.name; sel.appendChild(o);
+  });
+  $('browseCount').textContent = REGISTRY.integrations.length;
+  renderBrowse();
+}
+async function refreshRegistry() { toast('Refreshing registry…'); await loadRegistry(true); await loadInstalled(); toast('Registry updated', 'ok'); }
+
+function installedIds() { return new Set(INSTALLED.map(i => i.id)); }
+
+function renderBrowse() {
+  const q = $('searchInput').value.trim().toLowerCase();
+  const cat = $('catFilter').value;
+  const inst = installedIds();
+  const items = REGISTRY.integrations.filter(it => {
+    if (cat && !(it.categories || []).includes(cat)) return false;
+    if (!q) return true;
+    return (it.name || '').toLowerCase().includes(q) || (it.author || '').toLowerCase().includes(q)
+        || (it.description || '').toLowerCase().includes(q);
+  });
+  const grid = $('browseGrid');
+  grid.innerHTML = '';
+  if (!items.length) { grid.innerHTML = '<div class="empty"><h3>Nothing matches</h3><p>Try a different search or category.</p></div>'; return; }
+  items.forEach(it => {
+    const isInstalled = inst.has(it.id);
+    const card = document.createElement('div');
+    card.className = 'card' + (it.installable ? '' : ' disabled');
+    const badges = [];
+    if (isInstalled) badges.push('<span class="badge installed">installed</span>');
+    else if (it.official) badges.push('<span class="badge official">official</span>');
+    else badges.push('<span class="badge">' + (it.custom ? 'community' : 'custom') + '</span>');
+    const chips = (it.features || []).slice(0, 4).map(f => '<span class="chip">' + esc(f) + '</span>').join('');
+    let action;
+    if (!it.installable) action = '<span class="hint" style="margin:0">Bundled first-party — not installable here</span>';
+    else if (isInstalled) action = '<button class="btn btn-line btn-sm" onclick="switchTab(\'installed\')">Manage</button>';
+    else action = '<button class="btn btn-primary btn-sm" onclick="openInstall(\'' + it.id + '\')">Install</button>';
+    card.innerHTML =
+      '<div class="card-head"><div style="flex:1">' +
+        '<p class="card-title">' + esc(it.name) + '</p>' +
+        '<div class="card-dev">' + esc(it.author || 'unknown') + '</div>' +
+      '</div>' + badges.join('') + '</div>' +
+      '<p class="card-desc">' + esc(it.description || '') + '</p>' +
+      (chips ? '<div class="chips">' + chips + '</div>' : '') +
+      '<div class="card-foot"><div class="spacer"></div>' + action + '</div>';
+    grid.appendChild(card);
+  });
+}
+
+// ---- installed ----
+async function loadInstalled() {
+  try {
+    INSTALLED = await api('/api/installed');
+    $('installedCount').textContent = INSTALLED.length;
+    renderInstalled();
+    if (TAB === 'browse') renderBrowse();
+  } catch (e) {}
+}
+function statusLed(s) {
+  if (s === 'running') return '<span class="led on running-pulse"></span>';
+  if (s === 'restarting') return '<span class="led warn"></span>';
+  if (s === 'missing' || s === 'exited' || s === 'dead') return '<span class="led err"></span>';
+  return '<span class="led off"></span>';
+}
+function renderInstalled() {
+  const box = $('installedRows');
+  box.innerHTML = '';
+  if (!INSTALLED.length) {
+    box.innerHTML = '<div class="empty"><h3>No integrations installed</h3><p>Head to Browse and install one to get started.</p></div>';
+    return;
+  }
+  INSTALLED.forEach(it => {
+    const running = it.status === 'running';
+    const row = document.createElement('div');
+    row.className = 'row';
+    const toggle = running
+      ? '<button class="btn btn-line btn-sm" onclick="lifecycle(\'' + it.id + '\',\'stop\')">Stop</button>'
+      : '<button class="btn btn-primary btn-sm" onclick="lifecycle(\'' + it.id + '\',\'start\')">Start</button>';
+    const rc = it.restart_count || 0;
+    const looping = (it.status === 'restarting' || it.status === 'exited') && rc >= 3;
+    const statusText = esc(it.status) + (rc ? ' ×' + rc : '');
+    const crashHint = looping
+      ? '<span style="color:var(--red)">crash-looping — check Logs</span>' : '';
+    row.innerHTML =
+      '<div style="min-width:190px">' +
+        '<div class="name">' + esc(it.name) + '</div>' +
+        '<div class="meta">' +
+          '<span class="status-tag">' + statusLed(it.status) + statusText + '</span>' +
+          '<span>port ' + esc(String(it.port)) + '</span>' +
+          '<span class="src">' + esc(it.source || '') + '</span>' +
+          crashHint +
+        '</div>' +
+      '</div>' +
+      '<div class="row-actions">' + toggle +
+        '<button class="btn btn-line btn-sm" onclick="lifecycle(\'' + it.id + '\',\'restart\')">Restart</button>' +
+        '<button class="btn btn-line btn-sm" onclick="openLogs(\'' + it.id + '\')">Logs</button>' +
+        '<button class="btn btn-line btn-sm" onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
+        '<button class="btn btn-line btn-sm" onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
+        '<button class="btn btn-danger btn-sm" onclick="removeIntegration(\'' + it.id + '\')">Remove</button>' +
+      '</div>';
+    box.appendChild(row);
+  });
+}
+
+async function lifecycle(id, action) {
+  try { await api('/api/integrations/' + id + '/' + action, { method: 'POST' });
+    toast(action + ' ' + id, 'ok'); setTimeout(loadInstalled, 400);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function rebuild(id) {
+  const it = INSTALLED.find(x => x.id === id); if (!it) return;
+  if (!confirm('Rebuild ' + id + '? Re-pulls or rebuilds from source and recreates the container on port ' + it.port + '.')) return;
+  try {
+    const body = { port: it.port, env: it.env || {} };
+    const { job_id } = await api('/api/integrations/' + id + '/install', { method: 'POST', body: JSON.stringify(body) });
+    followJob(job_id, 'Rebuilding ' + id);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function removeIntegration(id) {
+  if (!confirm('Remove ' + id + '? The container is deleted. Config is kept unless you confirm purge next.')) return;
+  const purge = confirm('Also delete its saved config and cloned source? OK = purge, Cancel = keep.');
+  try { await api('/api/integrations/' + id + '?purge=' + purge, { method: 'DELETE' });
+    toast('Removed ' + id, 'ok'); loadInstalled();
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+// ---- config / install modal ----
+function envRows() {
+  return Array.from(document.querySelectorAll('#envList .env-row')).reduce((acc, r) => {
+    const k = r.querySelector('.k').value.trim(); const v = r.querySelector('.v').value;
+    if (k) acc[k] = v; return acc;
+  }, {});
+}
+function addEnvRow(k, v) {
+  const row = document.createElement('div');
+  row.className = 'env-row';
+  row.innerHTML = '<input class="k" placeholder="KEY" value="' + esc(k || '') + '">' +
+                  '<input class="v" placeholder="value" value="' + esc(v || '') + '">' +
+                  '<button class="btn btn-line btn-sm" onclick="this.parentElement.remove()">✕</button>';
+  $('envList').appendChild(row);
+}
+function openInstall(id) {
+  const it = REGISTRY.integrations.find(x => x.id === id); if (!it) return;
+  cfgMode = 'install'; cfgTarget = id;
+  $('cfgTitle').textContent = 'Install ' + it.name;
+  $('cfgSub').textContent = id;
+  $('cfgPort').value = '';
+  $('envList').innerHTML = '';
+  $('cfgSubmit').textContent = 'Install';
+  $('cfgBack').classList.add('show');
+}
+function openConfig(id) {
+  const it = INSTALLED.find(x => x.id === id); if (!it) return;
+  cfgMode = 'config'; cfgTarget = id;
+  $('cfgTitle').textContent = 'Configure ' + it.name;
+  $('cfgSub').textContent = id;
+  $('cfgPort').value = it.port || '';
+  $('envList').innerHTML = '';
+  Object.entries(it.env || {}).forEach(([k, v]) => addEnvRow(k, v));
+  $('cfgSubmit').textContent = 'Apply & restart';
+  $('cfgBack').classList.add('show');
+}
+async function submitConfig() {
+  const body = { env: envRows() };
+  const p = $('cfgPort').value.trim();
+  if (p) body.port = parseInt(p, 10);
+  const path = cfgMode === 'install'
+    ? '/api/integrations/' + cfgTarget + '/install'
+    : '/api/integrations/' + cfgTarget + '/config';
+  try {
+    const { job_id } = await api(path, { method: 'POST', body: JSON.stringify(body) });
+    closeModal('cfgBack');
+    followJob(job_id, cfgMode === 'install' ? 'Installing ' + cfgTarget : 'Reconfiguring ' + cfgTarget);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+// ---- job follower ----
+function followJob(jobId, title) {
+  $('jobTitle').textContent = title;
+  $('jobSub').innerHTML = '<span class="spin"></span>';
+  $('jobClose').style.display = 'none';
+  $('jobDone').style.display = 'none';
+  $('jobConsole').innerHTML = '';
+  $('jobBack').classList.add('show');
+  const poll = async () => {
+    let job;
+    try { job = await api('/api/jobs/' + jobId); } catch (e) { $('jobConsole').textContent = e.message; return; }
+    const c = $('jobConsole');
+    c.innerHTML = job.lines.map(l => /^ERROR/.test(l) ? '<span class="err">' + esc(l) + '</span>' : esc(l)).join('\n');
+    c.scrollTop = c.scrollHeight;
+    if (job.status === 'running') { setTimeout(poll, 900); return; }
+    $('jobSub').innerHTML = job.status === 'success' ? '✓ complete' : '✕ failed';
+    $('jobClose').style.display = 'block';
+    $('jobDone').style.display = 'block';
+    if (job.status === 'success') { toast(title.split(' ')[0] + ' complete', 'ok'); loadInstalled(); }
+    else toast('Job failed — see log', 'bad');
+  };
+  poll();
+}
+function closeJob() { closeModal('jobBack'); loadInstalled(); }
+
+// ---- logs ----
+async function openLogs(id) {
+  logTarget = id;
+  $('logSub').textContent = id;
+  $('logConsole').textContent = 'Loading…';
+  $('logBack').classList.add('show');
+  refreshLogs();
+}
+async function refreshLogs() {
+  if (!logTarget) return;
+  try {
+    const { logs } = await api('/api/integrations/' + logTarget + '/logs?tail=400');
+    const c = $('logConsole');
+    c.textContent = logs || '(no output yet)';
+    c.scrollTop = c.scrollHeight;
+  } catch (e) { $('logConsole').textContent = e.message; }
+}
+
+// ---- misc ----
+// ---- software update ----
+let UPD = null;
+
+async function loadUpdateStatus() {
+  try {
+    UPD = await api('/api/update/status');
+    renderUpdIndicator();
+  } catch (e) { /* token gate or offline */ }
+}
+function renderUpdIndicator() {
+  if (!UPD) return;
+  const cur = (UPD.current && UPD.current.short) || '—';
+  $('updInfo').textContent = UPD.update_available ? 'update available' : ('build ' + cur);
+  $('updBtn').classList.toggle('available', !!UPD.update_available);
+}
+async function checkUpdate() {
+  $('updInfo').textContent = 'checking…';
+  await loadUpdateStatus();
+  populateUpdate();
+  toast(UPD && UPD.update_available ? 'Update available' : 'Up to date', 'ok');
+}
+function commitLine(c) {
+  if (!c || !c.short) return '<span class="mono">unknown</span>';
+  const when = c.date ? new Date(c.date).toLocaleString() : '';
+  return '<span class="mono">' + esc(c.short) + '</span> — ' + esc(c.subject || '') +
+         (when ? '<div class="hint" style="margin-top:2px">' + esc(when) + '</div>' : '');
+}
+function populateUpdate() {
+  $('updRepo').textContent = UPD ? (UPD.repo.replace('https://github.com/', '') + ' · ' + UPD.branch) : '';
+  const b = $('updBodyContent');
+  if (!UPD) { b.innerHTML = '<p class="hint">Status unavailable.</p>'; return; }
+  let html = '';
+  if (UPD.error) html += '<p style="color:var(--red)">' + esc(UPD.error) + '</p>';
+  html += '<div class="field"><label>Installed</label>' + commitLine(UPD.current) + '</div>';
+  html += '<div class="field"><label>Latest on ' + esc(UPD.branch) + '</label>' +
+          (UPD.latest ? commitLine(UPD.latest) : '<span class="hint">could not fetch</span>') + '</div>';
+  if (UPD.update_available) html += '<p style="color:var(--amber);margin:0">An update is available.</p>';
+  else if (!UPD.error) html += '<p class="hint" style="margin:0">You are on the latest version.</p>';
+  if (!UPD.service_restartable)
+    html += '<p class="hint">The service can\'t restart itself here — after updating, run ' +
+            '<span class="mono">systemctl restart ' + esc(UPD.service) + '</span> manually.</p>';
+  b.innerHTML = html;
+  $('updApplyBtn').textContent = UPD.update_available ? 'Update & restart' : 'Reinstall latest';
+}
+function openUpdate() {
+  $('updBack').classList.add('show');
+  populateUpdate();
+  if (!UPD) checkUpdate();
+}
+async function applyUpdate() {
+  if (!confirm('Update the installer from GitHub and restart the service? Active integrations keep running.')) return;
+  try {
+    const { job_id } = await api('/api/update/apply', { method: 'POST', body: '{}' });
+    closeModal('updBack');
+    followUpdate(job_id);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+function followUpdate(jobId) {
+  $('jobTitle').textContent = 'Updating installer';
+  $('jobSub').innerHTML = '<span class="spin"></span>';
+  $('jobClose').style.display = 'none';
+  $('jobDone').style.display = 'none';
+  $('jobConsole').innerHTML = '';
+  $('jobBack').classList.add('show');
+  const poll = async () => {
+    let job;
+    try { job = await api('/api/jobs/' + jobId); }
+    catch (e) { awaitRestart(); return; }   // service may already be going down
+    const c = $('jobConsole');
+    c.innerHTML = job.lines.map(l => /^ERROR/.test(l) ? '<span class="err">' + esc(l) + '</span>' : esc(l)).join('\n');
+    c.scrollTop = c.scrollHeight;
+    if (job.status === 'running') { setTimeout(poll, 900); return; }
+    if (job.status === 'success') {
+      $('jobSub').innerHTML = '✓ updated';
+      if (UPD && UPD.service_restartable) awaitRestart();
+      else { $('jobClose').style.display = 'block'; $('jobDone').style.display = 'block'; toast('Update applied', 'ok'); }
+    } else {
+      $('jobSub').innerHTML = '✕ failed';
+      $('jobClose').style.display = 'block';
+      $('jobDone').style.display = 'block';
+      toast('Update failed — see log', 'bad');
+    }
+  };
+  poll();
+}
+function awaitRestart() {
+  $('jobSub').innerHTML = '<span class="spin"></span> service restarting…';
+  const line = document.createElement('div');
+  $('jobConsole').appendChild(line);
+  let tries = 0;
+  const ping = async () => {
+    tries++;
+    try {
+      const r = await fetch('/api/health', { cache: 'no-store' });
+      if (r.ok) { location.reload(); return; }
+    } catch (e) { /* still down */ }
+    if (tries > 60) { $('jobSub').innerHTML = 'restart taking a while — reload manually'; $('jobClose').style.display = 'block'; return; }
+    setTimeout(ping, 2000);
+  };
+  setTimeout(ping, 2500);
+}
+
+function switchTab(t) {
+  TAB = t;
+  $('browse').style.display = t === 'browse' ? 'block' : 'none';
+  $('installed').style.display = t === 'installed' ? 'block' : 'none';
+  $('tabBrowseBtn').classList.toggle('active', t === 'browse');
+  $('tabInstalledBtn').classList.toggle('active', t === 'installed');
+  if (t === 'installed') loadInstalled();
+  if (t === 'browse') renderBrowse();
+}
+function closeModal(id) { $(id).classList.remove('show'); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-back.show').forEach(m => m.classList.remove('show')); });
+
+async function init() {
+  const h = await loadHealth();
+  if (h.token_required && !token()) return;   // wait for unlock
+  try { await loadRegistry(false); } catch (e) {}
+  await loadInstalled();
+  loadUpdateStatus();
+  if (installedTimer) clearInterval(installedTimer);
+  installedTimer = setInterval(() => { if (!document.querySelector('.modal-back.show')) loadInstalled(); }, 6000);
+}
+init();
+</script>
+</body>
+</html>

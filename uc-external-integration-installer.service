@@ -1,0 +1,32 @@
+[Unit]
+Description=UC External Integration Installer (web UI for Unfolded Circle external integrations)
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# Installed by install.sh into /opt/uc-external-integration-installer
+WorkingDirectory=/opt/uc-external-integration-installer
+ExecStart=/opt/uc-external-integration-installer/venv/bin/python /opt/uc-external-integration-installer/uc_installer.py
+Restart=on-failure
+RestartSec=5
+
+# --- configuration -------------------------------------------------------
+Environment=UC_INSTALLER_HOST=0.0.0.0
+Environment=UC_INSTALLER_PORT=8900
+Environment=UC_INSTALLER_DATA=/var/lib/uc-external-integration-installer
+Environment=UC_PORT_START=8000
+# Self-update source (used by the built-in updater).
+Environment=UC_INSTALLER_UPDATE_REPO=https://github.com/jstnjx/uc-external-integration-installer
+Environment=UC_INSTALLER_UPDATE_BRANCH=main
+Environment=UC_INSTALLER_SERVICE=uc-external-integration-installer
+# Strongly recommended: set a token so the Docker control plane isn't open.
+# Environment=UC_INSTALLER_TOKEN=change-me
+
+# Needs the docker socket; runs as root by default. To run rootless, add the
+# service user to the docker group instead and drop this.
+User=root
+
+[Install]
+WantedBy=multi-user.target
