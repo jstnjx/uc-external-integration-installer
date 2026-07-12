@@ -1,12 +1,13 @@
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>UC External Integration Installer</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
 <style>
   /* ============================================================
      UC External Integration Installer — ClickHouse-inspired system
@@ -410,347 +411,376 @@
     .section-actions { width:100%; }
     .section-actions .btn { flex:1; }
   }
+
+
+  /* ---------- full-page workspace panels ---------- */
+  #dashboardShell { display: block; }
+  .workspace-panel { display: none; }
+  .workspace-panel.show { display: block; animation: workspaceIn .16s var(--ease); }
+  @keyframes workspaceIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+  .workspace-view {
+    width: 100%; max-width: none; min-height: 540px;
+    background: transparent; border: 0; border-radius: 0; box-shadow: none;
+    display: flex; flex-direction: column;
+  }
+  .workspace-view > header {
+    min-height: 70px; padding: 0 0 18px; margin-bottom: 24px;
+    border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px;
+  }
+  .workspace-view > header h2 { margin: 0; font-size: 24px; line-height: 1.2; color: var(--ink); letter-spacing: -.5px; }
+  .workspace-view > header .sub { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .workspace-view > .body { padding: 0; overflow: visible; flex: 1; }
+  .workspace-view > .foot {
+    position: sticky; bottom: 0; z-index: 5; margin-top: 28px; padding: 16px 0;
+    border-top: 1px solid var(--line); background: linear-gradient(to bottom, rgba(10,10,10,.92), var(--canvas) 28%);
+    display: flex; justify-content: flex-end; gap: 10px;
+  }
+  .workspace-view .x {
+    order: -1; margin-left: 0; margin-right: 2px; width: 36px; height: 36px;
+    display: grid; place-items: center; border: 1px solid var(--line); border-radius: var(--r-md);
+    background: var(--card); color: var(--body); font-size: 18px;
+  }
+  .workspace-view .x:hover { color: var(--ink); border-color: var(--line-2); background: var(--elev); }
+  .workspace-view > header .x ~ h2 { margin-left: 0; }
+  .workspace-view .console { max-height: none !important; min-height: 460px; }
+  #remBack .workspace-view > .body,
+  #maintBack .workspace-view > .body,
+  #setupBack .workspace-view > .body,
+  #cfgBack .workspace-view > .body,
+  #updBack .workspace-view > .body { max-width: 920px; width: 100%; }
+  #actBack .workspace-view > .body { max-width: 1040px; width: 100%; }
+  #logBack .workspace-view > header .x { margin-left: 0; }
+  #logBack .workspace-view > header h2 { order: 1; }
+  #logBack .workspace-view > header .sub { order: 2; }
+  #logBack .workspace-view > header .btn { order: 3; }
+  #logBack .workspace-view > header .x { order: 0; }
+  .workspace-panel .field input, .workspace-panel .field select { max-width: 100%; }
+  @media (max-width: 720px) {
+    .workspace-view > header { align-items: flex-start; flex-wrap: wrap; }
+    .workspace-view > header h2 { font-size: 20px; }
+    .workspace-view > header .sub { width: calc(100% - 50px); }
+    .workspace-view > header .btn { margin-left: 0 !important; }
+    .workspace-view > .foot { flex-wrap: wrap; }
+    .workspace-view > .foot .btn { flex: 1 1 auto; }
+  }
 </style>
 </head>
 <body>
 <header class="bar">
-  <div class="bar-inner">
-    <div class="brand">
-      <div class="logo"><span></span></div>
-      <div>
-        <h1>UC External Integration Installer</h1>
-        <p id="brandSub">external integrations · docker host</p>
-      </div>
-    </div>
-
-    <div class="header-health" aria-label="System health">
-      <div class="stat"><span class="led" id="ledDocker"></span> docker</div>
-      <div class="stat"><span class="led" id="ledReg"></span> <span id="regInfo">registry</span></div>
-      <button class="stat updbtn" id="updBtn" onclick="openUpdate()" title="Software updates">
-        <span class="led" id="ledUpd"></span> <span id="updInfo">build …</span>
-      </button>
-      <div class="stat" id="lockStat" style="display:none"><span class="led warn"></span> locked</div>
-    </div>
-
-    <div class="header-actions">
-      <div class="remote-picker">
-        <span class="remote-label">Remote</span>
-        <select id="remoteSelect" onchange="setActiveRemote(this.value)" title="Active remote"></select>
-      </div>
-      <button class="nav-action" onclick="openRemotes()" title="Manage remotes"><span>⚙</span><b>Remotes</b></button>
-      <button class="nav-action" onclick="openInstallerLogs()" title="Installer logs"><span>▤</span><b>Logs</b></button>
-      <button class="nav-action" onclick="openActivity()" title="Activity log"><span>≣</span><b>Activity</b></button>
-      <button class="nav-action" onclick="openMaint()" title="Maintenance"><span>⛭</span><b>Maintenance</b></button>
-    </div>
-  </div>
-</header>
-
-<main>
-  <div class="lockbar" id="lockbar">
-    <span class="led warn"></span>
-    <span style="font-size:13.5px">This installer requires a token to control Docker.</span>
-    <input id="tokenInput" type="password" placeholder="Access token" />
-    <button class="btn btn-primary btn-sm" onclick="saveToken()">Unlock</button>
-  </div>
-
-  <section class="page-head">
-    <div>
-      <div class="eyebrow">Integration host</div>
-      <h2>Manage external integrations</h2>
-      <p>Discover, install, operate, and register integrations from one place.</p>
-    </div>
-    <div class="overview" aria-label="Integration overview">
-      <div class="overview-item"><strong id="overviewInstalled">0</strong><span>installed</span></div>
-      <div class="overview-item"><strong id="overviewRunning">0</strong><span>running</span></div>
-      <div class="overview-item"><strong id="overviewUpdates">0</strong><span>updates</span></div>
-      <div class="overview-item"><strong id="overviewRegistered">0</strong><span>registered</span></div>
-    </div>
-  </section>
-
-  <div class="workspace-nav">
-    <div class="tabs">
-      <button class="tab active" id="tabBrowseBtn" onclick="switchTab('browse')">Browse
-        <span class="count" id="browseCount"></span></button>
-      <button class="tab" id="tabInstalledBtn" onclick="switchTab('installed')">Installed
-        <span class="count" id="installedCount"></span></button>
-    </div>
-    <div class="workspace-hint" id="workspaceHint">Find integrations from the configured registry.</div>
-  </div>
-
-  <section id="browse">
-    <div class="section-head">
-      <div><h3>Integration catalog</h3><p>Install supported integrations or create additional instances.</p></div>
-      <div class="section-actions">
-        <button class="btn btn-line" onclick="refreshRegistry()">↻ Refresh registry</button>
-        <button class="btn btn-primary" id="archiveBtn" style="display:none" onclick="$('archiveFile').click()" title="Install from an Unfolded Circle release .tar.gz (ARM64 host only)">Install from file</button>
-      </div>
-    </div>
-    <input type="file" id="archiveFile" accept=".tar.gz,.tgz,application/gzip" style="display:none" onchange="installArchive(this.files[0])" />
-    <div class="control-bar">
-      <div class="search"><input id="searchInput" placeholder="Search integrations, developers, or features…" oninput="renderBrowse()" /></div>
-      <select class="filter" id="catFilter" onchange="renderBrowse()"><option value="">All categories</option></select>
-    </div>
-    <div class="grid" id="browseGrid"></div>
-  </section>
-
-  <section id="installed" style="display:none">
-    <div class="section-head">
-      <div><h3>Installed instances</h3><p>Monitor runtime state, manage versions, and register drivers.</p></div>
-      <button class="btn btn-line" onclick="loadInstalled();loadUpdates();loadRegistrations();loadStats()">↻ Refresh status</button>
-    </div>
-    <div class="control-bar">
-      <div class="search"><input id="installedSearch" placeholder="Search installed integrations…" oninput="renderInstalled()" /></div>
-      <select class="filter" id="statusFilter" onchange="renderInstalled()">
-        <option value="">All states</option><option value="running">Running</option><option value="stopped">Stopped</option>
-        <option value="attention">Needs attention</option><option value="updates">Updates available</option>
-      </select>
-    </div>
-    <div class="rows" id="installedRows"></div>
-  </section>
-</main>
-
-<!-- CONFIG / INSTALL MODAL -->
-<div class="modal-back" id="cfgBack">
-  <div class="modal">
-    <header>
-      <h2 id="cfgTitle">Install</h2><span class="sub" id="cfgSub"></span>
-      <button class="x" aria-label="Close" onclick="closeModal('cfgBack')">×</button>
-    </header>
-    <div class="body">
-      <div class="field" id="cfgVersionField">
-        <label>Version</label>
-        <select id="cfgVersion" class="mono" style="width:100%"></select>
-        <div class="hint">Which release to install. "latest" tracks the newest build; a specific tag pins it.</div>
-      </div>
-      <div class="field" id="cfgPortField">
-        <label>Integration port</label>
-        <input id="cfgPort" class="mono" placeholder="auto" />
-        <div class="hint">The HTTP port the integration advertises on the host network. Leave blank to auto-assign.</div>
-      </div>
-      <div class="field" id="cfgEnvField">
-        <label>Environment variables</label>
-        <div id="envList"></div>
-        <button class="btn btn-line btn-sm" onclick="addEnvRow()">+ Add variable</button>
-        <div class="hint">Extra variables passed to the container (e.g. device IPs, credentials). Base UC_* variables are set automatically.</div>
-      </div>
-    </div>
-    <div class="foot">
-      <button class="btn btn-line" onclick="closeModal('cfgBack')">Cancel</button>
-      <button class="btn btn-primary" id="cfgSubmit" onclick="submitConfig()">Install</button>
-    </div>
-  </div>
+<div class="bar-inner">
+<div class="brand">
+<div class="logo"><span></span></div>
+<div>
+<h1>UC External Integration Installer</h1>
+<p id="brandSub">external integrations · docker host</p>
 </div>
+</div>
+<div aria-label="System health" class="header-health">
+<div class="stat"><span class="led" id="ledDocker"></span> docker</div>
+<div class="stat"><span class="led" id="ledReg"></span> <span id="regInfo">registry</span></div>
+<button class="stat updbtn" id="updBtn" onclick="openUpdate()" title="Software updates">
+<span class="led" id="ledUpd"></span> <span id="updInfo">build …</span>
+</button>
+<div class="stat" id="lockStat" style="display:none"><span class="led warn"></span> locked</div>
+</div>
+<div class="header-actions">
+<div class="remote-picker">
+<span class="remote-label">Remote</span>
+<select id="remoteSelect" onchange="setActiveRemote(this.value)" title="Active remote"></select>
+</div>
+<button class="nav-action" onclick="openRemotes()" title="Manage remotes"><span>⚙</span><b>Remotes</b></button>
+<button class="nav-action" onclick="openInstallerLogs()" title="Installer logs"><span>▤</span><b>Logs</b></button>
+<button class="nav-action" onclick="openActivity()" title="Activity log"><span>≣</span><b>Activity</b></button>
+<button class="nav-action" onclick="openMaint()" title="Maintenance"><span>⛭</span><b>Maintenance</b></button>
+</div>
+</div>
+</header>
+<main><div id="dashboardShell">
+<div class="lockbar" id="lockbar">
+<span class="led warn"></span>
+<span style="font-size:13.5px">This installer requires a token to control Docker.</span>
+<input id="tokenInput" placeholder="Access token" type="password"/>
+<button class="btn btn-primary btn-sm" onclick="saveToken()">Unlock</button>
+</div>
+<section class="page-head">
+<div>
+<div class="eyebrow">Integration host</div>
+<h2>Manage external integrations</h2>
+<p>Discover, install, operate, and register integrations from one place.</p>
+</div>
+<div aria-label="Integration overview" class="overview">
+<div class="overview-item"><strong id="overviewInstalled">0</strong><span>installed</span></div>
+<div class="overview-item"><strong id="overviewRunning">0</strong><span>running</span></div>
+<div class="overview-item"><strong id="overviewUpdates">0</strong><span>updates</span></div>
+<div class="overview-item"><strong id="overviewRegistered">0</strong><span>registered</span></div>
+</div>
+</section>
+<div class="workspace-nav">
+<div class="tabs">
+<button class="tab active" id="tabBrowseBtn" onclick="switchTab('browse')">Browse
+        <span class="count" id="browseCount"></span></button>
+<button class="tab" id="tabInstalledBtn" onclick="switchTab('installed')">Installed
+        <span class="count" id="installedCount"></span></button>
+</div>
+<div class="workspace-hint" id="workspaceHint">Find integrations from the configured registry.</div>
+</div>
+<section id="browse">
+<div class="section-head">
+<div><h3>Integration catalog</h3><p>Install supported integrations or create additional instances.</p></div>
+<div class="section-actions">
+<button class="btn btn-line" onclick="refreshRegistry()">↻ Refresh registry</button>
+<button class="btn btn-primary" id="archiveBtn" onclick="$('archiveFile').click()" style="display:none" title="Install from an Unfolded Circle release .tar.gz (ARM64 host only)">Install from file</button>
+</div>
+</div>
+<input accept=".tar.gz,.tgz,application/gzip" id="archiveFile" onchange="installArchive(this.files[0])" style="display:none" type="file"/>
+<div class="control-bar">
+<div class="search"><input id="searchInput" oninput="renderBrowse()" placeholder="Search integrations, developers, or features…"/></div>
+<select class="filter" id="catFilter" onchange="renderBrowse()"><option value="">All categories</option></select>
+</div>
+<div class="grid" id="browseGrid"></div>
+</section>
+<section id="installed" style="display:none">
+<div class="section-head">
+<div><h3>Installed instances</h3><p>Monitor runtime state, manage versions, and register drivers.</p></div>
+<button class="btn btn-line" onclick="loadInstalled();loadUpdates();loadRegistrations();loadStats()">↻ Refresh status</button>
+</div>
+<div class="control-bar">
+<div class="search"><input id="installedSearch" oninput="renderInstalled()" placeholder="Search installed integrations…"/></div>
+<select class="filter" id="statusFilter" onchange="renderInstalled()">
+<option value="">All states</option><option value="running">Running</option><option value="stopped">Stopped</option>
+<option value="attention">Needs attention</option><option value="updates">Updates available</option>
+</select>
+</div>
+<div class="rows" id="installedRows"></div>
+</section>
+</div><div class="workspace-panel" data-workspace-panel="true" id="cfgBack">
+<div class="workspace-view">
+<header>
+<h2 id="cfgTitle">Install</h2><span class="sub" id="cfgSub"></span>
+<button aria-label="Back" class="x" onclick="closeModal('cfgBack')" title="Back">←</button>
+</header>
+<div class="body">
+<div class="field" id="cfgVersionField">
+<label>Version</label>
+<select class="mono" id="cfgVersion" style="width:100%"></select>
+<div class="hint">Which release to install. "latest" tracks the newest build; a specific tag pins it.</div>
+</div>
+<div class="field" id="cfgPortField">
+<label>Integration port</label>
+<input class="mono" id="cfgPort" placeholder="auto"/>
+<div class="hint">The HTTP port the integration advertises on the host network. Leave blank to auto-assign.</div>
+</div>
+<div class="field" id="cfgEnvField">
+<label>Environment variables</label>
+<div id="envList"></div>
+<button class="btn btn-line btn-sm" onclick="addEnvRow()">+ Add variable</button>
+<div class="hint">Extra variables passed to the container (e.g. device IPs, credentials). Base UC_* variables are set automatically.</div>
+</div>
+</div>
+<div class="foot">
+<button class="btn btn-line" onclick="closeModal('cfgBack')">Cancel</button>
+<button class="btn btn-primary" id="cfgSubmit" onclick="submitConfig()">Install</button>
+</div>
+</div>
+</div><div class="workspace-panel" data-workspace-panel="true" id="jobBack">
+<div class="workspace-view">
+<header>
+<h2 id="jobTitle">Working…</h2><span class="sub" id="jobSub"><span class="spin"></span></span>
+<button aria-label="Back" class="x" id="jobClose" onclick="closeModal('jobBack')" style="display:none" title="Back">←</button>
+</header>
+<div class="body"><div class="console" id="jobConsole"></div></div>
+<div class="foot"><button class="btn btn-primary" id="jobDone" onclick="closeJob()" style="display:none">Done</button></div>
+</div>
+</div><div class="workspace-panel" data-workspace-panel="true" id="remBack">
+<div class="workspace-view">
+<header>
+<h2>Remotes</h2><span class="sub">register integrations to your UC remotes</span>
+<button aria-label="Back" class="x" onclick="closeModal('remBack')" title="Back">←</button>
+</header>
+<div class="body">
+<div id="remList"></div>
+<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+<h2 id="remFormTitle" style="font-size:14px;margin:0 0 12px">Add a remote</h2>
+<input id="remEditId" type="hidden" value=""/>
+<div class="field"><label>Name</label><input id="remName" placeholder="Living room remote"/></div>
+<div class="field"><label>Address</label><input class="mono" id="remAddr" placeholder="192.168.1.50  (or http://host:port)"/>
+<div class="hint">The remote's IP or hostname. Port defaults to 80.</div></div>
+<div class="field"><label>Web-configurator PIN</label><input class="mono" id="remPin" placeholder="PIN" type="password"/>
+<div class="hint">Set in the remote's web configurator. Used as HTTP Basic auth (web-configurator:PIN). Leave blank when editing to keep the saved PIN.</div></div>
+<div class="field"><label>API key (optional, overrides PIN)</label><input class="mono" id="remApiKey" placeholder="Bearer API key" type="password"/></div>
+<div class="field"><label>Advertise IP (optional)</label><input class="mono" id="remAdv" placeholder="auto-detected"/>
+<div class="hint">This host's IP as the remote should reach it. Auto-detected if blank.</div></div>
+<label class="checkline"><input id="remTls" type="checkbox"/> Use HTTPS / verify TLS</label>
+</div>
+</div>
+<div class="foot">
+<button class="btn btn-line" id="remCancelEdit" onclick="resetRemoteForm()" style="display:none">Cancel edit</button>
+<button class="btn btn-primary" id="remSaveBtn" onclick="saveRemote()">Add remote</button>
+</div>
+</div>
+</div><div class="workspace-panel" data-workspace-panel="true" id="updBack">
+<div class="workspace-view">
+<header>
+<h2>Software update</h2><span class="sub" id="updRepo"></span>
+<button aria-label="Back" class="x" onclick="closeModal('updBack')" title="Back">←</button>
+</header>
+<div class="body">
+<div class="field" id="updBuildField">
+<label>Build to install</label>
+<select class="mono" id="updRef" onchange="renderApplyLabel()"></select>
+<div class="hint">Pick a branch (e.g. <span class="mono">main</span>) or a released version tag. Defaults to the configured branch.</div>
+</div>
+<div id="updBodyContent"></div>
+</div>
+<div class="foot">
+<button class="btn btn-line" onclick="checkUpdate()">Check again</button>
+<button class="btn btn-primary" id="updApplyBtn" onclick="applyUpdate()">Update &amp; restart</button>
+</div>
+</div>
+</div><div class="workspace-panel" data-workspace-panel="true" id="logBack">
+<div class="workspace-view">
+<header>
+<h2>Logs</h2><span class="sub" id="logSub"></span>
+<button class="btn btn-line btn-sm" id="logFollowBtn" onclick="toggleFollow()" style="margin-left:auto">Follow</button>
+<button class="btn btn-line btn-sm" onclick="refreshLogs()">Refresh</button>
+<button class="btn btn-line btn-sm" onclick="downloadLogs()">Download</button>
+<button aria-label="Back" class="x" onclick="closeLogs()" title="Back">←</button>
+</header>
+<div class="body"><div class="console" id="logConsole" style="max-height:60vh"></div></div>
+</div>
+</div><div class="workspace-panel" data-workspace-panel="true" id="actBack">
+<div class="workspace-view">
+<header>
+<h2>Activity</h2><span class="sub">recent events</span>
+<button class="btn btn-line btn-sm" onclick="loadActivity()" style="margin-left:auto">Refresh</button>
+<button aria-label="Back" class="x" onclick="closeModal('actBack')" title="Back">←</button>
+</header>
+<div class="body"><div id="actList"></div></div>
+</div>
+</div><div class="workspace-panel" data-workspace-panel="true" id="maintBack">
+<div class="workspace-view">
+<header>
+<h2>Maintenance</h2><span class="sub">backup · restore · cleanup</span>
+<button aria-label="Back" class="x" onclick="closeModal('maintBack')" title="Back">←</button>
+</header>
+<div class="body">
+<div class="field">
+<label>Settings</label>
+<div class="hint" style="margin:0 0 8px">Ports, registry, updates, health probe, and access token.</div>
+<button class="btn btn-line btn-sm" onclick="closeModal('maintBack');openSetup()">Open all settings…</button>
+</div>
+<div style="height:1px;background:var(--line);margin:6px 0 18px"></div>
+<div class="field">
+<label>Notifications</label>
+<div class="hint" style="margin:0 0 8px">Send a webhook when things happen. Works with ntfy (paste your topic URL) or any JSON webhook.</div>
+<input class="mono" id="alertWebhook" placeholder="https://ntfy.sh/your-topic" style="margin-bottom:10px"/>
+<div class="alert-events" id="alertEvents"></div>
+<div style="display:flex;gap:8px;margin-top:12px">
+<button class="btn btn-primary btn-sm" onclick="saveAlertSettings()">Save</button>
+<button class="btn btn-line btn-sm" onclick="testAlert()">Send test</button>
+</div>
+</div>
+<div style="height:1px;background:var(--line);margin:6px 0 18px"></div>
+<div class="field">
+<label>Backup</label>
+<div class="hint" style="margin:0 0 8px">Download a tar.gz of all instance config and state.</div>
+<button class="btn btn-primary btn-sm" onclick="downloadBackup()">Download backup</button>
+</div>
+<div class="field">
+<label>Restore</label>
+<div class="hint" style="margin:0 0 8px">Restore config + state from a backup, then rebuild instances.</div>
+<input accept=".tar.gz,.tgz,application/gzip" id="restoreFile" onchange="restoreBackup(this.files[0])" style="display:none" type="file"/>
+<button class="btn btn-line btn-sm" onclick="$('restoreFile').click()">Choose backup…</button>
+</div>
+<div class="field">
+<label>Reconcile</label>
+<div class="hint" style="margin:0 0 8px">Adopt any managed containers missing from the list (after manual docker changes or a reboot).</div>
+<button class="btn btn-line btn-sm" onclick="doReconcile()">Reconcile now</button>
+</div>
+<div class="field">
+<label>Prune images</label>
+<div class="hint" style="margin:0 0 8px">Delete built images no longer used by any instance to reclaim disk.</div>
+<button class="btn btn-line btn-sm" onclick="doPrune()">Prune build images</button>
+</div>
+</div>
+</div>
+</div><div class="workspace-panel" data-workspace-panel="true" id="setupBack">
+<div class="workspace-view">
+<header>
+<h2 id="setupTitle">Welcome — first-time setup</h2><span class="sub">configure the installer</span>
+</header>
+<div class="body">
+<p class="hint" style="margin-top:0">Set things up to your liking. Everything here stays editable later under Maintenance → Settings.</p>
+<div class="eyebrow" style="margin:6px 0 10px">Integrations</div>
+<div class="field">
+<label>First integration port</label>
+<input class="mono" id="setupPort" placeholder="8000"/>
+<div class="hint">Integrations get host ports starting here (8000, 8001, …).</div>
+</div>
+<div class="field">
+<label>Registry URL</label>
+<input class="mono" id="setupRegistry" placeholder="https://raw.githubusercontent.com/…/registry.json"/>
+<div class="hint">Source of the browsable integration catalog.</div>
+</div>
+<div class="eyebrow" style="margin:16px 0 10px">Updates</div>
+<div class="field">
+<label>Update repository</label>
+<input class="mono" id="setupRepo" placeholder="https://github.com/owner/repo"/>
+<div class="hint">Git repo the installer updates itself from.</div>
+</div>
+<div class="field">
+<label>Update branch / build</label>
+<select class="mono" id="setupBranch"></select>
+<div class="hint">Which build to track. Loaded from the update repo; falls back to a text default if offline.</div>
+</div>
+<div class="field">
+<label>systemd service name</label>
+<input class="mono" id="setupService" placeholder="uc-external-integration-installer"/>
+<div class="hint">Unit restarted after an update. Change only if you renamed it.</div>
+</div>
+<div class="eyebrow" style="margin:16px 0 10px">Health &amp; access</div>
+<label class="checkline"><input checked="" id="setupProbe" type="checkbox"/> Enable WebSocket health probe</label>
+<div class="hint" style="margin:4px 0 12px">Periodically checks each integration is serving. Disable to remove all extra connections.</div>
+<div class="field">
+<label>Access token <span style="color:var(--muted)">· optional</span></label>
+<input class="mono" id="setupToken" placeholder="leave blank for no authentication">
+<div class="hint">If set, the UI and API require this bearer token. It will be remembered in this browser.</div>
+</input></div>
+<div class="eyebrow" style="margin:16px 0 10px">Notifications</div>
+<div class="field">
+<label>Webhook <span style="color:var(--muted)">· optional</span></label>
+<input class="mono" id="setupWebhook" placeholder="https://ntfy.sh/your-topic (Discord/Slack/JSON also work)"/>
+<div class="hint">Where to send notifications. Pick which events below.</div>
+</div>
+<div class="alert-events" id="setupEvents"></div>
+<div class="eyebrow" style="margin:16px 0 10px">Runtime <span style="color:var(--muted-2)">· set at install time</span></div>
+<div class="det-grid" id="setupRuntime"></div>
+<div class="hint" style="margin-top:8px">These are fixed by the systemd unit — to change them, re-run <span class="mono">install.sh</span> with the matching env vars (or edit the unit).</div>
+</div>
+<div class="foot">
+<button class="btn btn-line" id="setupCancel" onclick="closeModal('setupBack')" style="display:none">Cancel</button>
+<button class="btn btn-primary" id="setupFinish" onclick="finishSetup()">Finish setup</button>
+</div>
+</div>
+</div></main>
+<!-- CONFIG / INSTALL MODAL -->
 
 <!-- JOB / PROGRESS MODAL -->
-<div class="modal-back" id="jobBack">
-  <div class="modal">
-    <header>
-      <h2 id="jobTitle">Working…</h2><span class="sub" id="jobSub"><span class="spin"></span></span>
-      <button class="x" aria-label="Close" id="jobClose" onclick="closeModal('jobBack')" style="display:none">×</button>
-    </header>
-    <div class="body"><div class="console" id="jobConsole"></div></div>
-    <div class="foot"><button class="btn btn-primary" id="jobDone" style="display:none" onclick="closeJob()">Done</button></div>
-  </div>
-</div>
 
 <!-- REMOTES MODAL -->
-<div class="modal-back" id="remBack">
-  <div class="modal">
-    <header>
-      <h2>Remotes</h2><span class="sub">register integrations to your UC remotes</span>
-      <button class="x" aria-label="Close" onclick="closeModal('remBack')">×</button>
-    </header>
-    <div class="body">
-      <div id="remList"></div>
-
-      <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
-        <h2 style="font-size:14px;margin:0 0 12px" id="remFormTitle">Add a remote</h2>
-        <input type="hidden" id="remEditId" value="" />
-        <div class="field"><label>Name</label><input id="remName" placeholder="Living room remote" /></div>
-        <div class="field"><label>Address</label><input id="remAddr" class="mono" placeholder="192.168.1.50  (or http://host:port)" />
-          <div class="hint">The remote's IP or hostname. Port defaults to 80.</div></div>
-        <div class="field"><label>Web-configurator PIN</label><input id="remPin" type="password" class="mono" placeholder="PIN" />
-          <div class="hint">Set in the remote's web configurator. Used as HTTP Basic auth (web-configurator:PIN). Leave blank when editing to keep the saved PIN.</div></div>
-        <div class="field"><label>API key (optional, overrides PIN)</label><input id="remApiKey" type="password" class="mono" placeholder="Bearer API key" /></div>
-        <div class="field"><label>Advertise IP (optional)</label><input id="remAdv" class="mono" placeholder="auto-detected" />
-          <div class="hint">This host's IP as the remote should reach it. Auto-detected if blank.</div></div>
-        <label class="checkline"><input type="checkbox" id="remTls" /> Use HTTPS / verify TLS</label>
-      </div>
-    </div>
-    <div class="foot">
-      <button class="btn btn-line" id="remCancelEdit" style="display:none" onclick="resetRemoteForm()">Cancel edit</button>
-      <button class="btn btn-primary" id="remSaveBtn" onclick="saveRemote()">Add remote</button>
-    </div>
-  </div>
-</div>
 
 <!-- UPDATE MODAL -->
-<div class="modal-back" id="updBack">
-  <div class="modal">
-    <header>
-      <h2>Software update</h2><span class="sub" id="updRepo"></span>
-      <button class="x" aria-label="Close" onclick="closeModal('updBack')">×</button>
-    </header>
-    <div class="body">
-      <div class="field" id="updBuildField">
-        <label>Build to install</label>
-        <select id="updRef" class="mono" onchange="renderApplyLabel()"></select>
-        <div class="hint">Pick a branch (e.g. <span class="mono">main</span>) or a released version tag. Defaults to the configured branch.</div>
-      </div>
-      <div id="updBodyContent"></div>
-    </div>
-    <div class="foot">
-      <button class="btn btn-line" onclick="checkUpdate()">Check again</button>
-      <button class="btn btn-primary" id="updApplyBtn" onclick="applyUpdate()">Update &amp; restart</button>
-    </div>
-  </div>
-</div>
 
 <!-- LOGS MODAL -->
-<div class="modal-back" id="logBack">
-  <div class="modal">
-    <header>
-      <h2>Logs</h2><span class="sub" id="logSub"></span>
-      <button class="btn btn-line btn-sm" style="margin-left:auto" id="logFollowBtn" onclick="toggleFollow()">Follow</button>
-      <button class="btn btn-line btn-sm" onclick="refreshLogs()">Refresh</button>
-      <button class="btn btn-line btn-sm" onclick="downloadLogs()">Download</button>
-      <button class="x" aria-label="Close" onclick="closeLogs()">×</button>
-    </header>
-    <div class="body"><div class="console" id="logConsole" style="max-height:60vh"></div></div>
-  </div>
-</div>
 
 <!-- ACTIVITY MODAL -->
-<div class="modal-back" id="actBack">
-  <div class="modal">
-    <header>
-      <h2>Activity</h2><span class="sub">recent events</span>
-      <button class="btn btn-line btn-sm" style="margin-left:auto" onclick="loadActivity()">Refresh</button>
-      <button class="x" aria-label="Close" onclick="closeModal('actBack')">×</button>
-    </header>
-    <div class="body"><div id="actList"></div></div>
-  </div>
-</div>
 
 <!-- MAINTENANCE MODAL -->
-<div class="modal-back" id="maintBack">
-  <div class="modal">
-    <header>
-      <h2>Maintenance</h2><span class="sub">backup · restore · cleanup</span>
-      <button class="x" aria-label="Close" onclick="closeModal('maintBack')">×</button>
-    </header>
-    <div class="body">
-      <div class="field">
-        <label>Settings</label>
-        <div class="hint" style="margin:0 0 8px">Ports, registry, updates, health probe, and access token.</div>
-        <button class="btn btn-line btn-sm" onclick="closeModal('maintBack');openSetup()">Open all settings…</button>
-      </div>
-      <div style="height:1px;background:var(--line);margin:6px 0 18px"></div>
-      <div class="field">
-        <label>Notifications</label>
-        <div class="hint" style="margin:0 0 8px">Send a webhook when things happen. Works with ntfy (paste your topic URL) or any JSON webhook.</div>
-        <input id="alertWebhook" class="mono" placeholder="https://ntfy.sh/your-topic" style="margin-bottom:10px" />
-        <div id="alertEvents" class="alert-events"></div>
-        <div style="display:flex;gap:8px;margin-top:12px">
-          <button class="btn btn-primary btn-sm" onclick="saveAlertSettings()">Save</button>
-          <button class="btn btn-line btn-sm" onclick="testAlert()">Send test</button>
-        </div>
-      </div>
-      <div style="height:1px;background:var(--line);margin:6px 0 18px"></div>
-      <div class="field">
-        <label>Backup</label>
-        <div class="hint" style="margin:0 0 8px">Download a tar.gz of all instance config and state.</div>
-        <button class="btn btn-primary btn-sm" onclick="downloadBackup()">Download backup</button>
-      </div>
-      <div class="field">
-        <label>Restore</label>
-        <div class="hint" style="margin:0 0 8px">Restore config + state from a backup, then rebuild instances.</div>
-        <input type="file" id="restoreFile" accept=".tar.gz,.tgz,application/gzip" style="display:none" onchange="restoreBackup(this.files[0])" />
-        <button class="btn btn-line btn-sm" onclick="$('restoreFile').click()">Choose backup…</button>
-      </div>
-      <div class="field">
-        <label>Reconcile</label>
-        <div class="hint" style="margin:0 0 8px">Adopt any managed containers missing from the list (after manual docker changes or a reboot).</div>
-        <button class="btn btn-line btn-sm" onclick="doReconcile()">Reconcile now</button>
-      </div>
-      <div class="field">
-        <label>Prune images</label>
-        <div class="hint" style="margin:0 0 8px">Delete built images no longer used by any instance to reclaim disk.</div>
-        <button class="btn btn-line btn-sm" onclick="doPrune()">Prune build images</button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- FIRST-RUN SETUP -->
-<div class="modal-back" id="setupBack">
-  <div class="modal">
-    <header>
-      <h2 id="setupTitle">Welcome — first-time setup</h2><span class="sub">configure the installer</span>
-    </header>
-    <div class="body">
-      <p class="hint" style="margin-top:0">Set things up to your liking. Everything here stays editable later under Maintenance → Settings.</p>
 
-      <div class="eyebrow" style="margin:6px 0 10px">Integrations</div>
-      <div class="field">
-        <label>First integration port</label>
-        <input id="setupPort" class="mono" placeholder="8000" />
-        <div class="hint">Integrations get host ports starting here (8000, 8001, …).</div>
-      </div>
-      <div class="field">
-        <label>Registry URL</label>
-        <input id="setupRegistry" class="mono" placeholder="https://raw.githubusercontent.com/…/registry.json" />
-        <div class="hint">Source of the browsable integration catalog.</div>
-      </div>
-
-      <div class="eyebrow" style="margin:16px 0 10px">Updates</div>
-      <div class="field">
-        <label>Update repository</label>
-        <input id="setupRepo" class="mono" placeholder="https://github.com/owner/repo" />
-        <div class="hint">Git repo the installer updates itself from.</div>
-      </div>
-      <div class="field">
-        <label>Update branch / build</label>
-        <select id="setupBranch" class="mono"></select>
-        <div class="hint">Which build to track. Loaded from the update repo; falls back to a text default if offline.</div>
-      </div>
-      <div class="field">
-        <label>systemd service name</label>
-        <input id="setupService" class="mono" placeholder="uc-external-integration-installer" />
-        <div class="hint">Unit restarted after an update. Change only if you renamed it.</div>
-      </div>
-
-      <div class="eyebrow" style="margin:16px 0 10px">Health &amp; access</div>
-      <label class="checkline"><input type="checkbox" id="setupProbe" checked> Enable WebSocket health probe</label>
-      <div class="hint" style="margin:4px 0 12px">Periodically checks each integration is serving. Disable to remove all extra connections.</div>
-      <div class="field">
-        <label>Access token <span style="color:var(--muted)">· optional</span></label>
-        <input id="setupToken" class="mono" placeholder="leave blank for no authentication" />
-        <div class="hint">If set, the UI and API require this bearer token. It will be remembered in this browser.</div>
-      </div>
-
-      <div class="eyebrow" style="margin:16px 0 10px">Notifications</div>
-      <div class="field">
-        <label>Webhook <span style="color:var(--muted)">· optional</span></label>
-        <input id="setupWebhook" class="mono" placeholder="https://ntfy.sh/your-topic (Discord/Slack/JSON also work)" />
-        <div class="hint">Where to send notifications. Pick which events below.</div>
-      </div>
-      <div id="setupEvents" class="alert-events"></div>
-
-      <div class="eyebrow" style="margin:16px 0 10px">Runtime <span style="color:var(--muted-2)">· set at install time</span></div>
-      <div class="det-grid" id="setupRuntime"></div>
-      <div class="hint" style="margin-top:8px">These are fixed by the systemd unit — to change them, re-run <span class="mono">install.sh</span> with the matching env vars (or edit the unit).</div>
-    </div>
-    <div class="foot">
-      <button class="btn btn-line" id="setupCancel" onclick="closeModal('setupBack')" style="display:none">Cancel</button>
-      <button class="btn btn-primary" id="setupFinish" onclick="finishSetup()">Finish setup</button>
-    </div>
-  </div>
-</div>
-
-<input type="file" id="instRestoreFile" accept=".tar.gz,.tgz,application/gzip" style="display:none" onchange="doInstanceRestore(this.files[0])" />
+<input accept=".tar.gz,.tgz,application/gzip" id="instRestoreFile" onchange="doInstanceRestore(this.files[0])" style="display:none" type="file"/>
 <div id="toasts"></div>
-
 <script>
 const $ = (id) => document.getElementById(id);
 let REGISTRY = { integrations: [], categories: [] };
@@ -1175,7 +1205,7 @@ function openInstall(id) {
   $('cfgPort').value = ''; $('envList').innerHTML = '';
   _cfgFields(true, true, true);
   $('cfgSubmit').textContent = 'Install';
-  $('cfgBack').classList.add('show');
+  showWorkspacePanel('cfgBack');
   loadVersionOptions(id, 'latest');
 }
 function openVersion(id) {
@@ -1185,7 +1215,7 @@ function openVersion(id) {
   $('cfgSub').textContent = id;
   _cfgFields(true, false, false);
   $('cfgSubmit').textContent = 'Install version';
-  $('cfgBack').classList.add('show');
+  showWorkspacePanel('cfgBack');
   loadVersionOptions(cfgIntegration, it.version || 'latest');
 }
 function openConfig(id) {
@@ -1197,7 +1227,7 @@ function openConfig(id) {
   Object.entries(it.env || {}).forEach(([k, v]) => addEnvRow(k, v));
   _cfgFields(false, true, true);
   $('cfgSubmit').textContent = 'Apply & restart';
-  $('cfgBack').classList.add('show');
+  showWorkspacePanel('cfgBack');
 }
 async function submitConfig() {
   let path, body = {};
@@ -1228,7 +1258,7 @@ function followJob(jobId, title) {
   $('jobClose').style.display = 'none';
   $('jobDone').style.display = 'none';
   $('jobConsole').innerHTML = '';
-  $('jobBack').classList.add('show');
+  showWorkspacePanel('jobBack');
   const poll = async () => {
     let job;
     try { job = await api('/api/jobs/' + jobId); } catch (e) { $('jobConsole').textContent = e.message; return; }
@@ -1256,7 +1286,7 @@ async function openLogs(id) {
   document.querySelector('#logBack h2').textContent = 'Logs';
   $('logSub').textContent = id;
   $('logConsole').textContent = 'Loading…';
-  $('logBack').classList.add('show');
+  showWorkspacePanel('logBack');
   refreshLogs();
 }
 async function openInstallerLogs() {
@@ -1266,7 +1296,7 @@ async function openInstallerLogs() {
   document.querySelector('#logBack h2').textContent = 'Installer logs';
   $('logSub').textContent = 'systemd journal';
   $('logConsole').textContent = 'Loading…';
-  $('logBack').classList.add('show');
+  showWorkspacePanel('logBack');
   refreshLogs();
 }
 async function refreshLogs() {
@@ -1356,7 +1386,7 @@ async function loadBuilds() {
   renderApplyLabel();
 }
 function openUpdate() {
-  $('updBack').classList.add('show');
+  showWorkspacePanel('updBack');
   populateUpdate();
   loadBuilds();
   if (!UPD) checkUpdate();
@@ -1376,7 +1406,7 @@ function followUpdate(jobId) {
   $('jobClose').style.display = 'none';
   $('jobDone').style.display = 'none';
   $('jobConsole').innerHTML = '';
-  $('jobBack').classList.add('show');
+  showWorkspacePanel('jobBack');
   const poll = async () => {
     let job;
     try { job = await api('/api/jobs/' + jobId); }
@@ -1438,7 +1468,7 @@ async function setActiveRemote(id) {
     REMOTES.active = id || null;
   } catch (e) { toast(e.message, 'bad'); }
 }
-function openRemotes() { $('remBack').classList.add('show'); resetRemoteForm(); loadRemotes(); }
+function openRemotes() { showWorkspacePanel('remBack'); resetRemoteForm(); loadRemotes(); }
 function renderRemoteList() {
   const box = $('remList');
   const list = REMOTES.remotes || [];
@@ -1567,7 +1597,7 @@ async function registerIntegration(id) {
 }
 
 // ---- activity / maintenance / archive / streaming logs ----
-function openActivity() { $('actBack').classList.add('show'); loadActivity(); }
+function openActivity() { showWorkspacePanel('actBack'); loadActivity(); }
 async function loadActivity() {
   try {
     const { events } = await api('/api/events?limit=150');
@@ -1583,7 +1613,7 @@ async function loadActivity() {
     }).join('');
   } catch (e) { $('actList').innerHTML = '<p class="hint">' + esc(e.message) + '</p>'; }
 }
-function openMaint() { $('maintBack').classList.add('show'); loadAlertSettings(); }
+function openMaint() { showWorkspacePanel('maintBack'); loadAlertSettings(); }
 const ALERT_LABELS = { install: 'Installs', update: 'Updates available', register: 'Registrations', health: 'Health alerts (unreachable/exited)', remove: 'Removals', maintenance: 'Backup & maintenance', error: 'Errors' };
 async function loadAlertSettings() {
   try {
@@ -1671,6 +1701,8 @@ function closeLogs() {
 }
 
 function switchTab(t) {
+  hideAllWorkspacePanels();
+  $('dashboardShell').style.display = 'block';
   TAB = t;
   $('browse').style.display = t === 'browse' ? 'block' : 'none';
   $('installed').style.display = t === 'installed' ? 'block' : 'none';
@@ -1680,10 +1712,27 @@ function switchTab(t) {
   if (t === 'installed') { loadInstalled(); loadStats(); }
   if (t === 'browse') renderBrowse();
 }
-function closeModal(id) { $(id).classList.remove('show'); }
+function hideAllWorkspacePanels() {
+  document.querySelectorAll('.workspace-panel.show').forEach(p => p.classList.remove('show'));
+}
+function showWorkspacePanel(id) {
+  closeMenus();
+  hideAllWorkspacePanels();
+  $('dashboardShell').style.display = 'none';
+  const panel = $(id);
+  if (panel) panel.classList.add('show');
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}
+function hideWorkspacePanel(id) {
+  const panel = $(id);
+  if (panel) panel.classList.remove('show');
+  $('dashboardShell').style.display = 'block';
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}
+function closeModal(id) { hideWorkspacePanel(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-back.show').forEach(m => m.classList.remove('show')); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { const p = document.querySelector('.workspace-panel.show'); if (p && !(p.id === 'setupBack' && $('setupCancel').style.display === 'none')) closeModal(p.id); } });
 
 async function loadSetupBranches(selected) {
   const sel = $('setupBranch');
@@ -1728,7 +1777,7 @@ async function openSetup() {
     $('setupFinish').textContent = done ? 'Save settings' : 'Finish setup';
     $('setupCancel').style.display = done ? '' : 'none';
   } catch (e) {}
-  $('setupBack').classList.add('show');
+  showWorkspacePanel('setupBack');
 }
 async function finishSetup() {
   const body = { complete: true };
@@ -1748,7 +1797,7 @@ async function finishSetup() {
     await api('/api/setup', { method: 'POST', body: JSON.stringify(body) });
     // remember the token we just set so the reload isn't locked out
     if (tok) localStorage.setItem('uc_token', tok); else localStorage.removeItem('uc_token');
-    $('setupBack').classList.remove('show');
+    hideWorkspacePanel('setupBack');
     location.reload();
   } catch (e) { toast('Could not save setup: ' + e.message, 'bad'); }
 }
@@ -1765,7 +1814,7 @@ async function init() {
   loadStats();
   if (installedTimer) clearInterval(installedTimer);
   installedTimer = setInterval(() => {
-    if (!document.querySelector('.modal-back.show') && !document.querySelector('.menu.show')) { loadInstalled(); loadRegistrations(); loadStats(); }
+    if (!document.querySelector('.workspace-panel.show') && !document.querySelector('.menu.show')) { loadInstalled(); loadRegistrations(); loadStats(); }
   }, 6000);
 }
 init();
