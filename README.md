@@ -37,6 +37,31 @@ pip install -r requirements.txt
 python uc_installer.py      # serves on 0.0.0.0:8900
 ```
 
+## Uninstall / wipe
+
+One command removes the service, the installed integrations (containers), the
+locally-built images, and all data:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jstnjx/uc-external-integration-installer/main/uninstall.sh | sudo CONFIRM=1 bash
+```
+
+Flags: `KEEP_DATA=1` keeps `/var/lib/...` (state, config, backups), `KEEP_IMAGES=1`
+keeps `uc-local/*` images. Or do it manually:
+
+```bash
+sudo systemctl disable --now uc-external-integration-installer
+docker rm -f $(docker ps -aq --filter label=uc.installer=managed)   # integration containers
+docker rmi -f $(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^uc-local/')  # built images
+sudo rm -f /etc/systemd/system/uc-external-integration-installer.service && sudo systemctl daemon-reload
+sudo rm -rf /opt/uc-external-integration-installer          # code + venv
+sudo rm -rf /var/lib/uc-external-integration-installer      # state, config, backups
+```
+
+Driver **registrations on your UC remote(s) are not removed** by this — delete any
+leftovers from the remote's web-configurator (Integrations), or unregister them in
+the UI before wiping.
+
 ## Configuration
 
 Configuration is done in the UI — the first launch shows a setup wizard, and
