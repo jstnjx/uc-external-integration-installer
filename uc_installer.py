@@ -3,17 +3,6 @@
 UC External Integration Installer
 ======================
 
-A small self-hosted service that runs in the background on a Docker host and
-exposes a web UI to browse, install, configure and manage Unfolded Circle
-external integrations.
-
-It replaces the old shell installer:
-  - fetches the community registry
-  - lets you pick integrations from a modern web UI
-  - prefers a GHCR image, falls back to building from source
-  - runs each integration as a labelled Docker container (host networking)
-  - lets you start / stop / restart / reconfigure / remove them and read logs
-
 Run directly:
     python uc_installer.py
 
