@@ -29,20 +29,18 @@
     panel.id = 'healthBack';
     panel.className = 'workspace-panel health-page';
     panel.innerHTML = `
-      <header class="workspace-panel-head health-page-head">
-        <div>
-          <div class="eyebrow">Observability</div>
-          <h2>Health</h2>
-          <p>Host resources, managed Docker workloads, remotes, and installer service health.</p>
-        </div>
-        <div class="health-head-actions">
-          <span class="health-updated" id="healthUpdated">Not loaded</span>
-          <label class="health-auto"><input id="healthAutoRefresh" type="checkbox" checked onchange="setHealthAutoRefresh(this.checked)"> Auto-refresh</label>
-          <button class="btn btn-line" id="healthRefreshBtn" onclick="refreshHealth(true)"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg> Refresh</button>
-          <button class="btn btn-line" onclick="closeModal('healthBack')">Back</button>
-        </div>
-      </header>
-      <div class="body health-body" id="healthContent">${skeleton()}</div>`;
+      <div class="workspace-view">
+        <header>
+          <button aria-label="Back" class="x" onclick="closeModal('healthBack')" title="Back"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#arrow_back"></use></svg></button>
+          <h2>Health</h2><span class="sub">host · managed Docker · remotes · installer</span>
+          <div class="health-head-actions">
+            <span class="health-updated" id="healthUpdated">Not loaded</span>
+            <label class="health-auto"><input id="healthAutoRefresh" type="checkbox" checked onchange="setHealthAutoRefresh(this.checked)"> Auto-refresh</label>
+            <button class="btn btn-line btn-sm" id="healthRefreshBtn" onclick="refreshHealth(true)"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg><span>Refresh</span></button>
+          </div>
+        </header>
+        <div class="body health-body" id="healthContent">${skeleton()}</div>
+      </div>`;
     document.querySelector('main').appendChild(panel);
   }
 
@@ -87,11 +85,10 @@
   function renderRemotes(remotes) {
     const reachable = remotes.filter(r => r.reachable).length;
     const rows = remotes.map(r => `<div class="health-remote-row">
-      <div class="health-remote-main"><strong>${E(r.name)}</strong>${r.active ? '<span class="active-tag">active</span>' : ''}<small>${E(r.address)}</small></div>
+      <div class="health-remote-main"><strong>${E(r.name)}</strong><small>${E(r.address)}</small></div>
       ${status('', r.reachable, r.reachable ? 'Reachable' : 'Unreachable')}
       <div class="health-remote-stat"><strong>${r.reachable ? `${r.latency_ms} ms` : '—'}</strong><span>latency</span></div>
       <div class="health-remote-stat"><strong>${r.drivers || 0}</strong><span>drivers</span></div>
-      <div class="health-remote-stat"><strong>${E(r.auth)}</strong><span>authentication</span></div>
       <button class="btn btn-line btn-sm" onclick="testHealthRemote('${E(r.id)}')">Test</button>
     </div>`).join('');
     return `<section class="health-card health-card-full">
@@ -122,7 +119,7 @@
     if (refreshing || !panel?.classList.contains('show')) return;
     refreshing = true;
     const button = document.getElementById('healthRefreshBtn');
-    if (button) { button.disabled = true; button.textContent = '<svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg> Refreshing…'; }
+    if (button) { button.disabled = true; button.innerHTML = '<span class="ui-spinner" aria-hidden="true"></span><span>Refreshing…</span>'; }
     try {
       const data = await api('/api/health/overview', {timeout: 12000, dedupe: false});
       render(data);
@@ -131,7 +128,7 @@
       if (typeof window.operationNotice === 'function') window.operationNotice('Health refresh failed', error.message || 'Could not load health information.', 'failed', {retry: () => refreshHealth(true)});
     } finally {
       refreshing = false;
-      if (button) { button.disabled = false; button.textContent = '<svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg> Refresh'; }
+      if (button) { button.disabled = false; button.innerHTML = '<svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg><span>Refresh</span>'; }
     }
   };
 

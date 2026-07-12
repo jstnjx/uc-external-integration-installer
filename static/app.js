@@ -579,6 +579,12 @@ function scrollLogsToLatest(instant = false) {
     if (instant) requestAnimationFrame(() => { c.style.scrollBehavior = previous; });
   });
 }
+function showLogLoading() {
+  const c = $('logConsole');
+  if (!c) return;
+  c.classList.remove('log-view');
+  c.innerHTML = '<div class="log-loading" role="status"><span class="ui-spinner" aria-hidden="true"></span><span>Loading logs…</span></div>';
+}
 async function openLogs(id) {
   if (logSource) { logSource.close(); logSource = null; }
   $('logFollowBtn').textContent = 'Follow'; $('logFollowBtn').classList.remove('det-open');
@@ -587,7 +593,7 @@ async function openLogs(id) {
   document.querySelector('#logBack h2').textContent = 'Logs';
   $('logSub').textContent = id;
   clearLogFilters();
-  $('logConsole').classList.remove('log-view'); $('logConsole').textContent = 'Loading…';
+  showLogLoading();
   showWorkspacePanel('logBack');
   refreshLogs();
 }
@@ -598,7 +604,7 @@ async function openInstallerLogs() {
   document.querySelector('#logBack h2').textContent = 'Installer logs';
   $('logSub').textContent = 'systemd journal';
   clearLogFilters();
-  $('logConsole').classList.remove('log-view'); $('logConsole').textContent = 'Loading…';
+  showLogLoading();
   showWorkspacePanel('logBack');
   refreshLogs();
 }
@@ -687,6 +693,7 @@ function clearLogFilters() {
 }
 async function refreshLogs() {
   const c = $('logConsole');
+  showLogLoading();
   try {
     let logs;
     if (logInstaller) {
@@ -1127,7 +1134,19 @@ function closeLogs() {
   closeModal('logBack');
 }
 
+function cleanupTransientUi(nextId = '') {
+  closeMenus();
+  document.querySelectorAll('.menu.show').forEach(m => m.classList.remove('show'));
+  document.querySelectorAll('.loading-section').forEach(el => el.classList.remove('loading-section'));
+  document.querySelectorAll('select:focus, input:focus, button:focus').forEach(el => el.blur());
+  if (nextId !== 'remBack' && typeof window.closeRemoteDriverPanels === 'function') window.closeRemoteDriverPanels();
+  if (nextId !== 'logBack') {
+    const c = $('logConsole');
+    if (c?.querySelector('.log-loading')) c.innerHTML = '';
+  }
+}
 function switchTab(t) {
+  cleanupTransientUi('dashboard');
   hideAllWorkspacePanels();
   $('dashboardShell').style.display = 'block';
   TAB = t;
@@ -1143,7 +1162,7 @@ function hideAllWorkspacePanels() {
   document.querySelectorAll('.workspace-panel.show').forEach(p => p.classList.remove('show'));
 }
 function showWorkspacePanel(id) {
-  closeMenus();
+  cleanupTransientUi(id);
   hideAllWorkspacePanels();
   $('dashboardShell').style.display = 'none';
   const panel = $(id);

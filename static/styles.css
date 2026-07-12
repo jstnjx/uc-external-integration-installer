@@ -876,3 +876,17 @@
   .back-to-top{left:8px!important;bottom:8px!important}
   .operation-drawer{bottom:8px!important}
 }
+
+/* v5.6 cohesion and loading feedback */
+.ui-spinner{width:16px;height:16px;display:inline-block;flex:none;border:2px solid var(--line-2);border-top-color:var(--yellow);border-radius:50%;animation:sp .7s linear infinite}
+.log-loading{min-height:220px;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--muted);font:12px var(--mono)}
+.log-line:nth-child(even):not(.level-error){background:rgba(255,255,255,.018)}
+.log-line:nth-child(odd):not(.level-error){background:rgba(0,0,0,.08)}
+.log-line:hover{background:rgba(255,255,255,.055)!important}
+.health-page .workspace-view>header{display:flex;align-items:center;gap:12px}
+.health-page .workspace-view>header .x{order:0;margin-left:0}
+.health-page .workspace-view>header h2{order:1}
+.health-page .workspace-view>header .sub{order:2}
+.health-head-actions{order:3;margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.health-head-actions .btn{display:inline-flex;align-items:center;gap:7px}
+@media(max-width:760px){.health-head-actions{width:100%;margin-left:0}.health-updated{margin-right:auto}.health-page .workspace-view>header{align-items:flex-start;flex-wrap:wrap}}
