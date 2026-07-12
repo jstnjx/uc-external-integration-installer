@@ -485,6 +485,11 @@
       <button class="x" onclick="closeModal('updBack')">×</button>
     </header>
     <div class="body">
+      <div class="field" id="updBuildField">
+        <label>Build to install</label>
+        <select id="updRef" class="mono" onchange="renderApplyLabel()"></select>
+        <div class="hint">Pick a branch (e.g. <span class="mono">main</span>) or a released version tag. Defaults to the configured branch.</div>
+      </div>
       <div id="updBodyContent"></div>
     </div>
     <div class="foot">
@@ -1086,15 +1091,43 @@ function populateUpdate() {
   b.innerHTML = html;
   $('updApplyBtn').textContent = UPD.update_available ? 'Update & restart' : 'Reinstall latest';
 }
+function renderApplyLabel() {
+  const ref = $('updRef') && $('updRef').value;
+  const cur = (UPD && UPD.current && UPD.current.short) || '';
+  const btn = $('updApplyBtn');
+  if (!btn) return;
+  btn.textContent = (UPD && UPD.update_available && ref === UPD.branch) ? 'Update & restart'
+    : ('Install ' + (ref || 'selected build'));
+}
+async function loadBuilds() {
+  const sel = $('updRef'); if (!sel) return;
+  sel.innerHTML = '<option>loading…</option>';
+  try {
+    const data = await api('/api/update/builds');
+    const branches = (data.refs || []).filter(r => r.type === 'branch');
+    const tags = (data.refs || []).filter(r => r.type === 'tag');
+    let html = '';
+    if (branches.length) html += '<optgroup label="Branches">' +
+      branches.map(r => '<option value="' + esc(r.name) + '"' + (r.name === data.configured_branch ? ' selected' : '') + '>' + esc(r.name) + '</option>').join('') + '</optgroup>';
+    if (tags.length) html += '<optgroup label="Releases / tags">' +
+      tags.map(r => '<option value="' + esc(r.name) + '">' + esc(r.name) + '</option>').join('') + '</optgroup>';
+    sel.innerHTML = html || ('<option value="' + esc(data.configured_branch || 'main') + '">' + esc(data.configured_branch || 'main') + '</option>');
+  } catch (e) {
+    sel.innerHTML = '<option value="' + esc((UPD && UPD.branch) || 'main') + '">' + esc((UPD && UPD.branch) || 'main') + '</option>';
+  }
+  renderApplyLabel();
+}
 function openUpdate() {
   $('updBack').classList.add('show');
   populateUpdate();
+  loadBuilds();
   if (!UPD) checkUpdate();
 }
 async function applyUpdate() {
-  if (!confirm('Update the installer from GitHub and restart the service? Active integrations keep running.')) return;
+  const ref = ($('updRef') && $('updRef').value) || '';
+  if (!confirm('Install build "' + (ref || 'default') + '" from GitHub and restart the service? Active integrations keep running.')) return;
   try {
-    const { job_id } = await api('/api/update/apply', { method: 'POST', body: '{}' });
+    const { job_id } = await api('/api/update/apply', { method: 'POST', body: JSON.stringify({ ref: ref || null }) });
     closeModal('updBack');
     followUpdate(job_id);
   } catch (e) { toast(e.message, 'bad'); }

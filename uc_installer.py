@@ -225,13 +225,19 @@ def _fire_webhook(message: str, title: str = "UC External Integration Installer"
     url = load_alert_settings()["webhook"]
     if not url:
         return False
+    low = url.lower()
     try:
-        if "ntfy" in url:
-            httpx.post(url, content=message.encode("utf-8"),
-                       headers={"Title": title, "Tags": "gear"}, timeout=10.0)
+        if "discord.com/api/webhooks" in low or "discordapp.com/api/webhooks" in low:
+            # Discord requires a "content" field (max 2000 chars); 204 on success.
+            r = httpx.post(url, json={"content": f"**{title}**\n{message}"[:1900]}, timeout=10.0)
+        elif "ntfy" in low:
+            r = httpx.post(url, content=message.encode("utf-8"),
+                           headers={"Title": title, "Tags": "gear"}, timeout=10.0)
         else:
-            httpx.post(url, json={"title": title, "text": message, "message": message}, timeout=10.0)
-        return True
+            # generic: include the field names Slack/Discord/most webhooks look for
+            r = httpx.post(url, json={"title": title, "text": message,
+                                      "message": message, "content": message}, timeout=10.0)
+        return getattr(r, "status_code", 200) < 400
     except Exception:  # noqa: BLE001
         return False
 
@@ -1522,9 +1528,10 @@ def _run_git_logged(job: Job, *args: str) -> None:
         raise RuntimeError(f"git {' '.join(args)} failed ({r.returncode})")
 
 
-def do_update(job: Job) -> None:
+def do_update(job: Job, ref: str | None = None) -> None:
+    target = (ref or UPDATE_BRANCH).strip() or UPDATE_BRANCH
     try:
-        job.log(f"Repository: {UPDATE_REPO}  (branch {UPDATE_BRANCH})")
+        job.log(f"Repository: {UPDATE_REPO}  (build: {target})")
         job.log(f"Install directory: {APP_DIR}")
 
         if not _is_git_repo():
@@ -1533,7 +1540,7 @@ def do_update(job: Job) -> None:
             if _git("remote", "add", "origin", UPDATE_REPO).returncode != 0:
                 _run_git_logged(job, "remote", "set-url", "origin", UPDATE_REPO)
 
-        _run_git_logged(job, "fetch", "--depth", "1", "origin", UPDATE_BRANCH)
+        _run_git_logged(job, "fetch", "--depth", "1", "origin", target)
         _run_git_logged(job, "reset", "--hard", "FETCH_HEAD")
 
         cur = current_commit()
@@ -1676,12 +1683,43 @@ def api_update_status() -> dict[str, Any]:
     return info
 
 
+@app.get("/api/update/builds", dependencies=[Depends(require_token)])
+def api_update_builds() -> dict[str, Any]:
+    """List the branches and tags/releases of the installer repo the user can
+    switch to."""
+    owner_repo = _owner_repo_from_url(UPDATE_REPO)
+    headers = {"User-Agent": "uc-external-integration-installer",
+               "Accept": "application/vnd.github+json"}
+    refs: list[dict[str, str]] = []
+    error = None
+    try:
+        with httpx.Client(timeout=15.0, follow_redirects=True, headers=headers) as cl:
+            b = cl.get(f"https://api.github.com/repos/{owner_repo}/branches?per_page=100")
+            if b.status_code < 400:
+                for br in b.json():
+                    refs.append({"type": "branch", "name": br.get("name", "")})
+            t = cl.get(f"https://api.github.com/repos/{owner_repo}/tags?per_page=100")
+            if t.status_code < 400:
+                for tg in t.json():
+                    refs.append({"type": "tag", "name": tg.get("name", "")})
+    except Exception as exc:  # noqa: BLE001
+        error = f"Could not reach GitHub: {exc}"
+    refs = [r for r in refs if r["name"]]
+    return {"repo": UPDATE_REPO, "configured_branch": UPDATE_BRANCH,
+            "current": current_commit(), "refs": refs, "error": error}
+
+
+class UpdateBody(BaseModel):
+    ref: str | None = None
+
+
 @app.post("/api/update/apply", dependencies=[Depends(require_token)])
-def api_update_apply() -> dict[str, str]:
+def api_update_apply(body: UpdateBody | None = None) -> dict[str, str]:
     if not shutil.which("git"):
         raise HTTPException(500, "git is not installed on the host")
+    ref = (body.ref if body else None)
     job = new_job("update", "self")
-    threading.Thread(target=do_update, args=(job,), daemon=True).start()
+    threading.Thread(target=do_update, args=(job, ref), daemon=True).start()
     return {"job_id": job.id}
 
 

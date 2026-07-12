@@ -57,7 +57,9 @@ Set via environment (or `systemctl edit uc-external-integration-installer`):
 The installed code is a git checkout of the source repo, so the service can
 update itself. The web UI shows the current build in the header; when the tracked
 branch is ahead, the indicator turns amber and reads **update available**. Opening
-it shows the installed vs latest commit and an **Update & restart** button, which:
+it shows the installed vs latest commit, a **Build to install** picker (choose any
+branch — e.g. `main`/`dev` — or a released version tag), and an **Update & restart**
+button, which:
 
 1. fetches the branch and hard-resets the install directory to its tip,
 2. refreshes Python dependencies in the venv,
@@ -128,11 +130,12 @@ can revoke over reusing sensitive credentials.
   until the driver actually appears/connects and reports the result.
 - **Live logs**: the Logs dialog can **Follow** (server-sent events stream) and
   **Download** the full log. Installs are **serialized** so concurrent builds don't clash.
-- **Notifications**: configure a webhook in **Maintenance → Notifications** (ntfy URL
-  or any JSON webhook) and tick which events to be notified about — installs, updates
-  available, registrations, health alerts, removals, backup/maintenance, and errors.
-  A **Send test** button verifies it. `UC_INSTALLER_ALERT_WEBHOOK` still works as a
-  default if you'd rather set it via environment.
+- **Notifications**: configure a webhook in **Maintenance → Notifications** (ntfy,
+  Discord, Slack, or any JSON webhook — the payload includes the fields each expects)
+  and tick which events to be notified about — installs, updates available,
+  registrations, health alerts, removals, backup/maintenance, and errors. A **Send
+  test** button verifies it (and reports a failing URL). `UC_INSTALLER_ALERT_WEBHOOK`
+  still works as a default if you'd rather set it via environment.
 
 ## Security
 
