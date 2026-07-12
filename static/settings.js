@@ -18,12 +18,13 @@
   ['settingsToken','alertWebhook','remPin','remApiKey'].forEach(decorateSecret);
 
   let baseline='';
+  let baselineValues={};
   const editable=()=>[...panel.querySelectorAll('input,select,textarea')].filter(el=>!el.disabled&&!el.closest('[data-settings-tab="runtime"]')&&!['reconcileAdopt','reconcileRemoveStale','reconcileRestartStopped','pruneUnusedLocal','pruneDangling','pruneBuildCache'].includes(el.id));
   function snapshot(){const o={};editable().forEach((el,i)=>o[el.id||i]=el.type==='checkbox'?el.checked:el.value);return JSON.stringify(o);}
   function updateDirty(){const dirty=!!baseline&&snapshot()!==baseline;$('settingsSaveDock')?.classList.toggle('show',dirty);$('settingsUnifiedSave')?.toggleAttribute('disabled',!dirty);const count=editable().filter((el,i)=>{try{const base=JSON.parse(baseline||'{}');return base[el.id||i]!=(el.type==='checkbox'?el.checked:el.value);}catch{return false;}}).length;if($('settingsDirtySummary'))$('settingsDirtySummary').textContent=count+' unsaved change'+(count===1?'':'s');}
   panel.addEventListener('input',updateDirty);panel.addEventListener('change',updateDirty);
-  window.captureSettingsBaseline=()=>{baseline=snapshot();updateDirty();panel.querySelectorAll('.secret-field.changed').forEach(x=>x.classList.remove('changed'));};
-  window.discardSettingsChanges=async()=>{await loadMainSettings();await loadAlertSettings();setTimeout(captureSettingsBaseline,120);};
+  window.captureSettingsBaseline=()=>{baseline=snapshot();try{baselineValues=JSON.parse(baseline||'{}');}catch{baselineValues={};}updateDirty();panel.querySelectorAll('.secret-field.changed').forEach(x=>x.classList.remove('changed'));};
+  window.discardSettingsChanges=async()=>{editable().forEach((el,i)=>{const key=el.id||i;if(!(key in baselineValues))return;if(el.type==='checkbox')el.checked=!!baselineValues[key];else el.value=baselineValues[key]??'';el.dispatchEvent(new Event('change',{bubbles:false}));});updateDirty();};
   window.saveAllSettings=async()=>{const port=Number($('settingsPort')?.value);if(!Number.isInteger(port)||port<1||port>65535){showTab('general');toast('First integration port must be between 1 and 65535','bad');$('settingsPort')?.focus();return;}const btn=$('settingsUnifiedSave');btn.disabled=true;btn.innerHTML='<span class="spin"></span> Saving';try{await saveMainSettings({silent:true});await saveAlertSettings({silent:true});captureSettingsBaseline();toast('All settings saved','ok');}finally{btn.textContent='Save changes';updateDirty();}};
   window.openMaint=async function(){showWorkspacePanel('maintBack');showTab(active);$('settingsSaveDock')?.classList.remove('show');await Promise.all([loadMainSettings(),loadAlertSettings()]);captureSettingsBaseline();};
 

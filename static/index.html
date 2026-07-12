@@ -197,7 +197,7 @@
 <div class="log-toolbar">
 <div class="search"><input id="logSearch" placeholder="Filter log messages…" oninput="applyLogFilters()"/></div>
 <select class="filter" id="logLevelFilter" onchange="applyLogFilters()"><option value="">All levels</option><option value="error">Errors</option><option value="warn">Warnings</option><option value="info">Info</option><option value="success">Success</option><option value="debug">Debug</option><option value="other">Other</option></select>
-<select class="filter" id="logTimeFilter" onchange="applyLogFilters()"><option value="">Any time</option><option value="5">Last 5 minutes</option><option value="15">Last 15 minutes</option><option value="60">Last hour</option><option value="360">Last 6 hours</option><option value="1440">Last 24 hours</option></select>
+<select class="filter" id="logTimeFilter" onchange="applyLogFilters()"><option value="0">All time</option><option value="5">Last 5 minutes</option><option value="15">Last 15 minutes</option><option value="60">Last hour</option><option value="360">Last 6 hours</option><option value="1440">Last 24 hours</option></select>
 <label class="checkline compact-check"><input id="logRegex" type="checkbox" onchange="applyLogFilters()"/> Regex</label>
 <label class="checkline compact-check"><input id="logWrap" type="checkbox" checked onchange="toggleLogWrap()"/> Wrap</label>
 <label class="checkline compact-check"><input id="logTimestamps" type="checkbox" checked onchange="toggleLogTimestamps()"/> Timestamps</label>

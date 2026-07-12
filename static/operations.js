@@ -17,3 +17,29 @@
   const cu=window.checkUpdate;window.checkUpdate=async function(){if($('updBodyContent'))$('updBodyContent').innerHTML=rows(2);return cu();};
   const sar=window.setActiveRemote;window.setActiveRemote=async function(id){const r=await sar(id);AppStore.state.activeRemote=id;AppStore.persist();return r;};
 })();
+
+/* Route all transient feedback through Operations instead of toast popups. */
+(() => {
+  let noticeSeq=0;
+  window.toast=function(message,kind){
+    const id='notice-'+Date.now()+'-'+(++noticeSeq);
+    const failed=kind==='bad';
+    addOperation(id, failed?'Action failed':'Notification');
+    updateOperation(id,{status:failed?'failed':'success',lines:[String(message)],progress:100,title:String(message)});
+    const drawer=$('operationDrawer');
+    if(drawer){drawer.classList.remove('hidden');requestAnimationFrame(updateFloatingOffsets);}
+    return id;
+  };
+  window.toastAction=function(message,kind,label,action){
+    const id=toast(message,kind);
+    const op=OPERATIONS.get(id);
+    if(op&&label){op.actionLabel=label;op.action=action;renderOperations();}
+  };
+  const baseRender=window.renderOperations;
+  window.renderOperations=function(){
+    baseRender();
+    const list=$('operationList');if(!list)return;
+    const ops=Array.from(OPERATIONS.values()).slice(-8).reverse();
+    [...list.children].forEach((el,i)=>{const op=ops[i];if(op?.actionLabel){const b=document.createElement('button');b.className='btn btn-line btn-sm';b.textContent=op.actionLabel;b.onclick=()=>op.action?.();el.appendChild(b);}});
+  };
+})();

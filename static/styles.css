@@ -754,3 +754,10 @@
 .settings-save-dock.show{display:flex}.settings-save-dock span{margin-right:auto;color:var(--yellow);font:600 12px var(--mono)}
 .maintenance-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:16px}.maintenance-card{padding:16px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--card)}.maintenance-card h4{margin:0 0 12px;color:var(--ink);font-size:14px}.maintenance-card .checkline{margin:10px 0}.maintenance-card .btn{margin-top:10px}
 @media(max-width:800px){.maintenance-options{grid-template-columns:1fr}.settings-save-dock{bottom:8px;flex-wrap:wrap}.settings-save-dock span{width:100%}.settings-tabs{top:58px}}
+
+/* Selection marker: fixed in the top-right without shifting row content. */
+.integration-row-head{position:relative;padding-right:30px}
+.selection-marker{position:absolute!important;top:0;right:0;margin:0!important}
+.selection-marker:not(.on){visibility:hidden}
+.integration-row.selected .selection-marker{visibility:visible}
+#toasts{display:none!important}
