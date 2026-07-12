@@ -442,7 +442,17 @@
   }
   .workspace-view .x:hover { color: var(--ink); border-color: var(--line-2); background: var(--elev); }
   .workspace-view > header .x ~ h2 { margin-left: 0; }
-  .workspace-view .console { max-height: none !important; min-height: 460px; }
+  .workspace-view .console { min-height: 460px; }
+  #logBack .workspace-view { min-height: calc(100vh - 122px); }
+  #logBack .workspace-view > .body { min-height: 0; display: flex; flex-direction: column; }
+  #logBack #logConsole {
+    height: calc(100vh - 245px);
+    min-height: 360px;
+    max-height: calc(100vh - 245px) !important;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scroll-behavior: smooth;
+  }
   #remBack .workspace-view > .body,
   #maintBack .workspace-view > .body,
   #setupBack .workspace-view > .body,
@@ -460,6 +470,7 @@
     .workspace-view > header h2 { font-size: 20px; }
     .workspace-view > header .sub { width: calc(100% - 50px); }
     .workspace-view > header .btn { margin-left: 0 !important; }
+    #logBack #logConsole { height: calc(100vh - 300px); min-height: 300px; max-height: calc(100vh - 300px) !important; }
     .workspace-view > .foot { flex-wrap: wrap; }
     .workspace-view > .foot .btn { flex: 1 1 auto; }
   }
@@ -491,7 +502,7 @@
 <button class="nav-action" onclick="openRemotes()" title="Manage remotes"><span>⚙</span><b>Remotes</b></button>
 <button class="nav-action" onclick="openInstallerLogs()" title="Installer logs"><span>▤</span><b>Logs</b></button>
 <button class="nav-action" onclick="openActivity()" title="Activity log"><span>≣</span><b>Activity</b></button>
-<button class="nav-action" onclick="openMaint()" title="Maintenance"><span>⛭</span><b>Maintenance</b></button>
+<button class="nav-action" onclick="openMaint()" title="Settings"><span>⛭</span><b>Settings</b></button>
 </div>
 </div>
 </header>
@@ -660,7 +671,7 @@
 </div><div class="workspace-panel" data-workspace-panel="true" id="maintBack">
 <div class="workspace-view">
 <header>
-<h2>Maintenance</h2><span class="sub">backup · restore · cleanup</span>
+<h2>Settings</h2><span class="sub">configuration · notifications · maintenance</span>
 <button aria-label="Back" class="x" onclick="closeModal('maintBack')" title="Back">←</button>
 </header>
 <div class="body">
@@ -710,7 +721,7 @@
 <h2 id="setupTitle">Welcome — first-time setup</h2><span class="sub">configure the installer</span>
 </header>
 <div class="body">
-<p class="hint" style="margin-top:0">Set things up to your liking. Everything here stays editable later under Maintenance → Settings.</p>
+<p class="hint" style="margin-top:0">Set things up to your liking. Everything here stays editable later under Settings.</p>
 <div class="eyebrow" style="margin:6px 0 10px">Integrations</div>
 <div class="field">
 <label>First integration port</label>
@@ -1278,6 +1289,16 @@ function closeJob() { closeModal('jobBack'); loadInstalled(); }
 
 // ---- logs ----
 let logInstaller = false;
+function scrollLogsToLatest(instant = false) {
+  const c = $('logConsole');
+  if (!c) return;
+  const previous = c.style.scrollBehavior;
+  if (instant) c.style.scrollBehavior = 'auto';
+  requestAnimationFrame(() => {
+    c.scrollTop = c.scrollHeight;
+    if (instant) requestAnimationFrame(() => { c.style.scrollBehavior = previous; });
+  });
+}
 async function openLogs(id) {
   if (logSource) { logSource.close(); logSource = null; }
   $('logFollowBtn').textContent = 'Follow'; $('logFollowBtn').classList.remove('det-open');
@@ -1310,7 +1331,7 @@ async function refreshLogs() {
       logs = (await api('/api/instances/' + logTarget + '/logs?tail=400')).logs;
     }
     c.textContent = logs || '(no output yet)';
-    c.scrollTop = c.scrollHeight;
+    scrollLogsToLatest(true);
   } catch (e) { c.textContent = e.message; }
 }
 
@@ -1679,7 +1700,7 @@ function toggleFollow() {
   const url = logInstaller ? ('/api/installer/logs/stream' + t) : ('/api/instances/' + logTarget + '/logs/stream' + t);
   logSource = new EventSource(url);
   const c = $('logConsole');
-  logSource.onmessage = (e) => { c.textContent += (c.textContent ? '\n' : '') + e.data; c.scrollTop = c.scrollHeight; };
+  logSource.onmessage = (e) => { c.textContent += (c.textContent ? '\n' : '') + e.data; scrollLogsToLatest(); };
   logSource.onerror = () => {};
   $('logFollowBtn').textContent = 'Following…'; $('logFollowBtn').classList.add('det-open');
 }
