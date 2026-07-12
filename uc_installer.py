@@ -52,7 +52,7 @@ from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1715,6 +1715,17 @@ class ActiveRemoteBody(BaseModel):
     id: str | None = None
 
 
+class UpdatePolicyBody(BaseModel):
+    mode: str = "off"  # off | notify | stable | prerelease | scheduled
+    delay_days: int = 0
+    maintenance_window: str = ""
+
+
+class SettingsImportBody(BaseModel):
+    payload: dict[str, Any]
+
+
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -2501,8 +2512,138 @@ def api_remotes_unregister(rid: str, driver_id: str) -> dict[str, str]:
     if r.status_code in (200, 204):
         with _remote_drivers_lock:
             _remote_drivers_cache.pop(rid, None)
+        record_event("register", None, f"unregistered {driver_id} from {remote.get('name', rid)}")
         return {"status": "unregistered", "driver_id": driver_id}
     raise HTTPException(502, f"Remote returned {r.status_code}")
+
+
+# ---- diagnostics, settings portability, registration preflight --------------
+
+
+def _tcp_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+@app.get("/api/remotes/{rid}/registration-preflight/{instance_id}", dependencies=[Depends(require_token)])
+def api_registration_preflight(rid: str, instance_id: str) -> dict[str, Any]:
+    remote = _get_remote_or_404(rid)
+    rec = load_state()["integrations"].get(instance_id)
+    if not rec:
+        raise HTTPException(404, "Instance is not installed")
+    entry = find_integration(rec.get("integration_id", instance_id)) or {}
+    advertise = remote.get("advertise_ip") or detect_host_ip(remote["host"])
+    payload = build_driver_payload(entry, rec, advertise or "0.0.0.0", int(rec.get("port") or 0))
+    issues: list[dict[str, Any]] = []
+    reachable = True
+    drivers: list[dict[str, Any]] = []
+    try:
+        drivers = remote_all_drivers(remote)
+    except Exception as exc:
+        reachable = False
+        issues.append({"code": "remote_unreachable", "severity": "error", "message": f"Remote unreachable: {exc}"})
+    if rec.get("status") not in (None, "running"):
+        issues.append({"code": "integration_stopped", "severity": "error", "message": "Integration is not running"})
+    if not advertise:
+        issues.append({"code": "advertise_ip_missing", "severity": "error", "message": "Advertise IP could not be determined"})
+    if advertise and not _tcp_reachable(advertise, int(rec.get("port") or 0)):
+        issues.append({"code": "port_unreachable", "severity": "warning", "message": f"Integration port {rec.get('port')} is not reachable on {advertise}"})
+    same_id = next((d for d in drivers if d.get("driver_id") == payload["driver_id"]), None)
+    same_url = next((d for d in drivers if d.get("driver_url") == payload["driver_url"]), None)
+    if same_id:
+        issues.append({"code": "driver_id_exists", "severity": "warning", "message": "Driver ID is already registered", "driver": same_id})
+    if same_url and not same_id:
+        issues.append({"code": "driver_url_exists", "severity": "warning", "message": "The same driver URL is already registered", "driver": same_url})
+    return {"ok": reachable and not any(i["severity"] == "error" for i in issues), "reachable": reachable,
+            "driver_id": payload["driver_id"], "driver_url": payload["driver_url"], "issues": issues}
+
+
+@app.get("/api/diagnostics", dependencies=[Depends(require_token)])
+def api_diagnostics() -> dict[str, Any]:
+    docker_version = None
+    disk = shutil.disk_usage(DATA_DIR)
+    try:
+        docker_version = get_docker().version().get("Version")
+    except Exception:
+        pass
+    remotes = load_remotes()
+    remote_summary = []
+    for rid, r in remotes.get("remotes", {}).items():
+        ok = False
+        try:
+            ok = remote_request(r, "GET", "/intg/drivers?limit=1", timeout=2.0).status_code < 400
+        except Exception:
+            pass
+        remote_summary.append({"id": rid, "name": r.get("name"), "reachable": ok})
+    recent_errors = [e for e in load_events(200) if e.get("kind") == "error"][:20]
+    return {
+        "installer_version": app.version,
+        "python_version": platform.python_version(),
+        "docker_version": docker_version,
+        "data_dir": str(DATA_DIR),
+        "service_unit": service_unit_val(),
+        "registry_url": registry_url_val(),
+        "registry_commit": registry_commit(),
+        "active_jobs": sum(1 for j in JOBS.values() if j.status == "running"),
+        "installed_integrations": len(load_state().get("integrations", {})),
+        "remotes": remote_summary,
+        "disk": {"total": disk.total, "used": disk.used, "free": disk.free},
+        "recent_errors": recent_errors,
+    }
+
+
+@app.get("/api/settings/export", dependencies=[Depends(require_token)])
+def api_settings_export() -> dict[str, Any]:
+    remotes = load_remotes()
+    safe_remotes = []
+    for r in remotes.get("remotes", {}).values():
+        m = _mask(r)
+        m.pop("has_pin", None); m.pop("has_api_key", None)
+        safe_remotes.append(m)
+    return {"version": 1, "settings": {k:v for k,v in load_settings().items() if k != "token"},
+            "alerts": {"events": load_alert_settings().get("events", {})},
+            "remotes": safe_remotes}
+
+
+@app.post("/api/settings/import", dependencies=[Depends(require_token)])
+def api_settings_import(body: SettingsImportBody) -> dict[str, Any]:
+    payload = body.payload or {}
+    settings = payload.get("settings") or {}
+    allowed = {k:v for k,v in settings.items() if k in {"port_start","registry_url","update_repo","update_branch","update_service","health_probe"}}
+    save_settings(allowed)
+    alerts = payload.get("alerts") or {}
+    if isinstance(alerts.get("events"), dict):
+        cur = load_alert_settings(); save_alert_settings(cur.get("webhook", ""), alerts["events"])
+    record_event("state", None, "settings imported")
+    return {"ok": True, "imported": list(allowed)}
+
+
+@app.post("/api/service/restart", dependencies=[Depends(require_token)])
+def api_service_restart() -> dict[str, Any]:
+    if not _can_restart_service():
+        raise HTTPException(409, f"Service restart is not available; restart {service_unit_val()} manually")
+    record_event("state", None, f"installer service restart requested: {service_unit_val()}")
+    subprocess.Popen(["systemd-run", "--no-block", "--collect", "systemctl", "restart", service_unit_val()],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"ok": True, "service": service_unit_val()}
+
+
+@app.put("/api/instances/{instance_id}/update-policy", dependencies=[Depends(require_token)])
+def api_update_policy(instance_id: str, body: UpdatePolicyBody) -> dict[str, Any]:
+    if body.mode not in {"off", "notify", "stable", "prerelease", "scheduled"}:
+        raise HTTPException(400, "Invalid update policy")
+    with _state_lock:
+        state = load_state(); rec = state.get("integrations", {}).get(instance_id)
+        if not rec: raise HTTPException(404, "Instance is not installed")
+        rec["update_policy"] = {"mode": body.mode, "delay_days": max(0, int(body.delay_days)),
+                                "maintenance_window": body.maintenance_window.strip()}
+        rec["auto_update"] = body.mode in {"stable", "prerelease", "scheduled"}
+        save_state(state)
+    record_event("state", instance_id, f"update policy changed to {body.mode}")
+    return rec["update_policy"]
 
 
 # ---- events, backup, maintenance -------------------------------------------
@@ -2811,6 +2952,7 @@ def api_post_setup(body: SetupBody) -> dict[str, Any]:
             body.webhook if body.webhook is not None else cur["webhook"],
             body.events if body.events is not None else cur["events"],
         )
+    record_event("state", None, "installer settings changed")
     return {"setup_complete": s["setup_complete"], "port_start": s["port_start"]}
 
 
@@ -2822,7 +2964,9 @@ def api_get_alerts() -> dict[str, Any]:
 
 @app.put("/api/settings/alerts", dependencies=[Depends(require_token)])
 def api_put_alerts(body: AlertSettingsBody) -> dict[str, Any]:
-    return save_alert_settings(body.webhook, body.events)
+    result = save_alert_settings(body.webhook, body.events)
+    record_event("state", None, "notification settings changed")
+    return result
 
 
 @app.post("/api/settings/alerts/test", dependencies=[Depends(require_token)])
