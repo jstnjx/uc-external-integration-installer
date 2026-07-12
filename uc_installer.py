@@ -1199,12 +1199,31 @@ def _run_container(
 
 
 def do_install(entry: dict[str, Any], instance_id: str, ordinal: int, port: int,
-               extra_env: dict[str, str], job: Job, version: str = "latest"):
+               extra_env: dict[str, str], job: Job, version: str = "latest",
+               reuse: bool = False):
     try:
         if _install_lock.locked():
             job.log("Another install is in progress — queued, waiting ...")
         with _install_lock:
             version = version or "latest"
+
+            # Additional instances of an already-installed integration reuse the
+            # sibling's resolved image/stack — no re-pull or rebuild, same stack.
+            if reuse:
+                sib = next((r for iid, r in load_state()["integrations"].items()
+                            if iid != instance_id
+                            and r.get("integration_id") == entry["id"]
+                            and r.get("version", "latest") == version
+                            and r.get("image")), None)
+                if sib:
+                    job.log(f"Reusing image {sib['image']} from {sib.get('label', sib['id'])} "
+                            f"({sib.get('source')})")
+                    _run_container(entry, instance_id, ordinal, sib["image"], sib.get("source", "ghcr"),
+                                   port, extra_env, sib.get("entrypoint") or None, job, version,
+                                   sib.get("stack"))
+                    job.finish("success")
+                    return
+
             image = image_from_repo(entry["repository"], version)
             source = "ghcr"
             entrypoint = None
@@ -1321,11 +1340,15 @@ def do_install_archive(data: bytes, filename: str, job: Job):
             build_platform = _ARCH_PLATFORM.get(arch or "")
             host_pf = _host_platform()
             job.log(f"driver_id={driver_id} name={name} version={ver} binary_arch={arch} host={host_pf}")
-            plat = None
             if build_platform and build_platform != host_pf:
-                plat = build_platform
-                job.log(f"Binary is {arch} but host is {host_pf} — using {plat} "
-                        "(requires QEMU/binfmt emulation on the host).")
+                raise RuntimeError(
+                    f"This release is built for {arch}, but this host is {host_pf}. "
+                    "Release archives must run on a matching (native) architecture — under "
+                    "QEMU emulation the integration's mDNS sockets fail (OSError 92, "
+                    "'Protocol not available') and it crash-loops. Install this on an "
+                    "ARM64 host, or use a source/GHCR install instead."
+                )
+            plat = None
 
             (app_dir / "Dockerfile.external").write_text(ARCHIVE_DOCKERFILE)
             tag = f"uc-local/{instance_id}:{re.sub(r'[^a-z0-9_.-]','-',str(ver).lower())}"
@@ -1546,6 +1569,8 @@ def health() -> dict[str, Any]:
         "build": current_commit().get("short"),
         "registry_commit": registry_commit(),
         "nixpacks": _nixpacks_available(),
+        "host_arch": platform.machine(),
+        "archive_supported": platform.machine().lower() in ("aarch64", "arm64"),
     }
 
 
@@ -1680,7 +1705,7 @@ def api_add_instance(integration_id: str, body: InstallBody) -> dict[str, str]:
     job = new_job("install", instance_id)
     threading.Thread(
         target=do_install,
-        args=(entry, instance_id, ordinal, port, body.env, job, body.version or "latest"),
+        args=(entry, instance_id, ordinal, port, body.env, job, body.version or "latest", True),
         daemon=True,
     ).start()
     return {"job_id": job.id, "instance_id": instance_id}
@@ -1984,19 +2009,36 @@ def _remote_drivers(remote: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+def _driver_url_port(url: str) -> str | None:
+    m = re.search(r":(\d+)(?:/|$)", url or "")
+    return m.group(1) if m else None
+
+
+def _driver_is_ours(d: dict[str, Any], rec: dict[str, Any]) -> bool:
+    """True only if this remote driver is OUR external instance — not the remote's
+    own built-in (LOCAL) or uploaded (CUSTOM) driver that shares the driver_id."""
+    if not isinstance(d, dict) or d.get("driver_id") != rec.get("driver_id"):
+        return False
+    url = d.get("driver_url") or ""
+    recport = str(rec.get("port") or "")
+    if url:
+        # our registration set driver_url = ws://<host>:<our-port>; require an exact
+        # port match so a CUSTOM driver uploaded onto the remote isn't mistaken for ours
+        return bool(recport) and _driver_url_port(url) == recport
+    # no url in the listing → only trust an explicitly EXTERNAL type (never CUSTOM/LOCAL)
+    return (d.get("driver_type") or "").upper() == "EXTERNAL"
+
+
 @app.get("/api/registrations", dependencies=[Depends(require_token)])
 def api_registrations() -> dict[str, list[dict[str, str]]]:
-    """Map of installed integration id -> the remotes it's registered on."""
+    """Map of installed instance id -> the remotes it's registered on."""
     remotes = load_remotes()["remotes"]
     state = load_state()["integrations"]
     result: dict[str, list[dict[str, str]]] = {iid: [] for iid in state}
     for rid, remote in remotes.items():
-        present = {
-            d.get("driver_id") for d in _remote_drivers(remote) if isinstance(d, dict)
-        }
+        drivers = [d for d in _remote_drivers(remote) if isinstance(d, dict)]
         for iid, rec in state.items():
-            driver_id = rec.get("driver_id") or (find_integration(iid) or {}).get("driver_id") or iid
-            if driver_id in present:
+            if any(_driver_is_ours(d, rec) for d in drivers):
                 result[iid].append({"remote_id": rid, "remote_name": remote.get("name", rid)})
     return result
 
@@ -2123,36 +2165,49 @@ def api_remotes_register(rid: str, body: RegisterBody) -> dict[str, Any]:
             400, "Could not determine this host's IP — set an advertise IP on the remote"
         )
     payload = build_driver_payload(entry, rec, advertise, port)
+    post_status: int | None = None
+    post_text = ""
+    post_error: str | None = None
     try:
         r = remote_request(remote, "POST", "/intg/drivers", json_body=payload, timeout=20.0)
+        post_status = r.status_code
+        post_text = (r.text or "")[:300]
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"Could not reach remote: {exc}")
-    if r.status_code not in (200, 201):
-        if r.status_code == 401:
-            raise HTTPException(401, "Authentication failed — check the PIN or API key")
-        if r.status_code == 409:
-            raise HTTPException(409, f"Driver '{payload['driver_id']}' is already registered on this remote")
-        raise HTTPException(502, f"Remote returned {r.status_code}: {r.text[:300]}")
+        post_error = str(exc)
 
     with _remote_drivers_lock:
         _remote_drivers_cache.pop(rid, None)
 
-    # Confirmation: poll the remote until the driver actually appears/connects.
+    # The remote's POST status is unreliable — it can return 500 yet still register
+    # the driver. Verify by polling and treat a confirmed-present driver as success.
     confirmed, state = False, None
-    for _ in range(6):
-        time.sleep(1.0)
-        for d in _fetch_all_drivers(remote):
-            if isinstance(d, dict) and d.get("driver_id") == payload["driver_id"]:
-                confirmed = True
-                state = d.get("driver_state") or d.get("state")
+    try:
+        for _ in range(6):
+            time.sleep(1.0)
+            for d in remote_all_drivers(remote):
+                if isinstance(d, dict) and d.get("driver_id") == payload["driver_id"]:
+                    confirmed = True
+                    state = d.get("driver_state") or d.get("state")
+                    break
+            if confirmed and state in ("CONNECTED", "IDLE", None):
                 break
-        if confirmed and state in ("CONNECTED", "IDLE", None):
-            break
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 409 = already registered, which for our purposes is "it's there".
+    succeeded = confirmed or post_status in (200, 201, 204, 409)
+    if not succeeded:
+        if post_error:
+            raise HTTPException(502, f"Could not reach remote: {post_error}")
+        if post_status == 401:
+            raise HTTPException(401, "Authentication failed — check the PIN or API key")
+        raise HTTPException(502, f"Remote returned {post_status}: {post_text}")
+
     record_event("register", body.integration_id,
                  f"registered {payload['driver_id']} on {remote.get('name', rid)}"
                  + (f" ({state})" if state else ""))
     return {"ok": True, "driver_id": payload["driver_id"], "driver_url": payload["driver_url"],
-            "confirmed": confirmed, "driver_state": state}
+            "confirmed": confirmed, "driver_state": state, "remote_status": post_status}
 
 
 @app.delete("/api/remotes/{rid}/drivers/{driver_id}", dependencies=[Depends(require_token)])
@@ -2205,6 +2260,54 @@ async def api_restore(file: UploadFile = File(...)) -> dict[str, Any]:
         raise HTTPException(400, f"Invalid backup archive: {exc}")
     record_event("state", None, "restored config + state from backup")
     return {"status": "restored", "note": "Rebuild instances to recreate their containers."}
+
+
+@app.get("/api/instances/{instance_id}/backup", dependencies=[Depends(require_token)])
+def api_instance_backup(instance_id: str):
+    rec = load_state()["integrations"].get(instance_id)
+    if rec is None:
+        raise HTTPException(404, "Instance is not installed")
+    cfg = CONFIG_DIR / instance_id
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        meta = json.dumps(rec, indent=2).encode()
+        ti = tarfile.TarInfo(f"{instance_id}/instance.json"); ti.size = len(meta)
+        tar.addfile(ti, io.BytesIO(meta))
+        if cfg.exists():
+            tar.add(str(cfg), arcname=f"{instance_id}/config")
+    buf.seek(0)
+    fn = f"{instance_id}-backup-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".tar.gz"
+    return StreamingResponse(
+        buf, media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+@app.post("/api/instances/{instance_id}/restore", dependencies=[Depends(require_token)])
+async def api_instance_restore(instance_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    if instance_id not in load_state()["integrations"]:
+        raise HTTPException(404, "Instance is not installed")
+    data = await file.read()
+    dest = CONFIG_DIR / instance_id
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+            members = [m for m in tar.getmembers() if "config/" in m.name or m.name.endswith("/config")]
+            base = dest.resolve()
+            for m in members:
+                # strip everything up to and including the "config/" segment
+                rel = m.name.split("config/", 1)[1] if "config/" in m.name else ""
+                if not rel:
+                    continue
+                target = (dest / rel).resolve()
+                if not str(target).startswith(str(base)):
+                    continue
+                m.name = rel
+                tar.extract(m, dest)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Invalid backup archive: {exc}")
+    record_event("state", instance_id, "restored instance config from backup")
+    return {"status": "restored", "note": "Restart or rebuild the instance to apply."}
 
 
 @app.post("/api/maintenance/prune", dependencies=[Depends(require_token)])

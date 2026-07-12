@@ -219,6 +219,28 @@
   .kv .v2 { color: var(--body-strong); text-align: right; word-break: break-all; }
   .kv .v2 a { color: var(--yellow); }
   .btn.det-open { background: var(--elev); border-color: var(--line-2); color: var(--ink); }
+
+  .menu-wrap { position: relative; display: inline-block; }
+  .menu { position: absolute; right: 0; top: calc(100% + 4px); min-width: 172px;
+    background: var(--soft); border: 1px solid var(--line); border-radius: var(--r-md);
+    box-shadow: 0 16px 40px rgba(0,0,0,.6); padding: 5px; display: none; z-index: 30; }
+  .menu.show { display: block; }
+  .menu button { display: block; width: 100%; text-align: left; background: transparent;
+    border: 0; color: var(--body-strong); font-family: var(--sans); font-size: 13px;
+    padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+  .menu button:hover { background: var(--elev); color: var(--ink); }
+  .menu button.danger { color: var(--rose); }
+  .menu-sep { height: 1px; background: var(--line); margin: 5px 4px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; }
+  .tile-v { font-size: 20px; font-weight: 700; letter-spacing: -.5px; color: var(--ink); font-family: var(--mono); }
+  .tile-v .u { font-size: 13px; color: var(--muted); margin-left: 1px; font-weight: 500; }
+  .tile-k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-top: 5px; }
+  .det-actions { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .mini { background: var(--card); border: 1px solid var(--line); color: var(--body); border-radius: 5px;
+    padding: 1px 8px; font-size: 11px; cursor: pointer; font-family: var(--sans); }
+  .mini:hover { border-color: var(--line-2); color: var(--ink); }
   .empty h3 { color: var(--ink); font-weight: 700; margin: 0 0 6px; font-size: 18px; letter-spacing: -.3px; }
 
   /* ---------- token / lock bar ---------- */
@@ -366,7 +388,7 @@
       <div class="search"><input id="searchInput" placeholder="Search integrations or developers…" oninput="renderBrowse()" /></div>
       <select class="filter" id="catFilter" onchange="renderBrowse()"><option value="">All categories</option></select>
       <button class="btn-ghost" onclick="refreshRegistry()">Refresh registry</button>
-      <button class="btn-ghost" onclick="$('archiveFile').click()" title="Install from an Unfolded Circle release .tar.gz">Install from file</button>
+      <button class="btn-ghost" id="archiveBtn" style="display:none" onclick="$('archiveFile').click()" title="Install from an Unfolded Circle release .tar.gz (ARM64 host only)">Install from file</button>
       <input type="file" id="archiveFile" accept=".tar.gz,.tgz,application/gzip" style="display:none" onchange="installArchive(this.files[0])" />
     </div>
     <div class="grid" id="browseGrid"></div>
@@ -529,6 +551,7 @@
   </div>
 </div>
 
+<input type="file" id="instRestoreFile" accept=".tar.gz,.tgz,application/gzip" style="display:none" onchange="doInstanceRestore(this.files[0])" />
 <div id="toasts"></div>
 
 <script>
@@ -585,6 +608,7 @@ async function loadHealth() {
     $('regInfo').textContent = h.registry_ok ? ('registry v' + (h.registry_version || '?') + rc) : 'registry down';
     if (h.token_required) { $('lockStat').style.display = 'flex'; if (!token()) $('lockbar').classList.add('show'); }
     $('brandSub').textContent = 'external integrations · port ' + h.port_start + '+';
+    if ($('archiveBtn')) $('archiveBtn').style.display = h.archive_supported ? '' : 'none';
     return h;
   } catch (e) { return {}; }
 }
@@ -693,32 +717,61 @@ function detailsHtml(it) {
     ? '<a href="' + esc(it.repository) + '" target="_blank" rel="noopener">' + esc(it.repository.replace('https://github.com/','')) + '</a>'
     : '—';
   const wsUrl = 'ws://' + location.hostname + ':' + it.port;
-  const info = [
-    ['Version', 'v' + esc(it.version || 'latest')],
-    ['Image', esc(it.image || '—')],
-    ['Build', esc((it.source || '—') + (it.stack && it.stack !== 'dockerfile' ? ' · ' + it.stack : ''))],
-    ['Driver id', esc(it.driver_id || '—')],
-    ['Port', esc(String(it.port))],
-    ['Add URL', '<span class="mono">' + esc(wsUrl) + '</span> <button class="btn btn-line btn-sm" style="padding:1px 7px" onclick="navigator.clipboard&&navigator.clipboard.writeText(\'' + wsUrl + '\');toast(\'Copied\',\'ok\')">copy</button>'],
-    ['Installed', it.installed_at ? new Date(it.installed_at).toLocaleString() : '—'],
-    ['Updated', it.updated_at ? new Date(it.updated_at).toLocaleString() : '—'],
-    ['Repository', link],
-  ];
   const memStr = s.mem_used != null
     ? fmtBytes(s.mem_used) + (s.mem_limit ? ' / ' + fmtBytes(s.mem_limit) : '') + (s.mem_pct != null ? ' (' + s.mem_pct + '%)' : '')
     : '—';
-  const stats = [
-    ['CPU', s.cpu_pct != null ? s.cpu_pct + ' %' : '—'],
+  const tiles = [
+    ['CPU', s.cpu_pct != null ? s.cpu_pct + '<span class="u">%</span>' : '—'],
+    ['Memory', s.mem_used != null ? fmtBytes(s.mem_used) : '—'],
+    ['Uptime', fmtUptime(s.started_at)],
+    ['Health', s.health ? '<span style="color:' + healthColor(s.health) + '">' + esc(s.health) + '</span>' : '—'],
+  ].map(([k, v]) => '<div class="tile"><div class="tile-v">' + v + '</div><div class="tile-k">' + k + '</div></div>').join('');
+  const meta = [
+    ['Version', 'v' + esc(it.version || 'latest')],
+    ['Build', esc((it.source || '—') + (it.stack && it.stack !== 'dockerfile' ? ' · ' + it.stack : ''))],
+    ['Driver id', esc(it.driver_id || '—')],
+    ['Port', esc(String(it.port))],
     ['Memory', memStr],
     ['Processes', s.pids != null ? esc(String(s.pids)) : '—'],
-    ['Uptime', fmtUptime(s.started_at)],
-    ['Health', s.health ? '<span style="color:' + healthColor(s.health) + '">' + esc(s.health) + '</span>' : 'unknown'],
     ['Restarts', esc(String(it.restart_count || 0))],
+    ['Image', esc(it.image || '—')],
+    ['Installed', it.installed_at ? new Date(it.installed_at).toLocaleString() : '—'],
+    ['Updated', it.updated_at ? new Date(it.updated_at).toLocaleString() : '—'],
+    ['Repository', link],
+    ['Add URL', '<span class="mono">' + esc(wsUrl) + '</span> <button class="mini" onclick="copyText(\'' + wsUrl + '\')">copy</button>'],
   ];
   const kv = arr => arr.map(([k, v]) => '<div class="kv"><span class="k2">' + k + '</span><span class="v2">' + v + '</span></div>').join('');
-  return '<div class="eyebrow" style="margin-bottom:8px">Details</div><div class="det-grid">' + kv(info) + '</div>' +
-         '<div class="eyebrow" style="margin:14px 0 8px">Live stats</div><div class="det-grid">' + kv(stats) + '</div>';
+  return '<div class="tiles">' + tiles + '</div>' +
+         '<div class="det-grid">' + kv(meta) + '</div>' +
+         '<div class="det-actions">' +
+           '<button class="btn btn-line btn-sm" onclick="backupInstance(\'' + it.id + '\')">Backup config</button>' +
+           '<button class="btn btn-line btn-sm" onclick="restoreInstance(\'' + it.id + '\')">Restore config…</button>' +
+         '</div>';
 }
+function copyText(t) { if (navigator.clipboard) navigator.clipboard.writeText(t); toast('Copied', 'ok'); }
+function backupInstance(id) {
+  window.location.href = '/api/instances/' + id + '/backup' + (token() ? '?token=' + encodeURIComponent(token()) : '');
+}
+let restoreTarget = null;
+function restoreInstance(id) { restoreTarget = id; $('instRestoreFile').click(); }
+async function doInstanceRestore(file) {
+  if (!file || !restoreTarget) return;
+  const fd = new FormData(); fd.append('file', file);
+  const h = {}; if (token()) h['Authorization'] = 'Bearer ' + token();
+  try {
+    const r = await fetch('/api/instances/' + restoreTarget + '/restore', { method: 'POST', headers: h, body: fd });
+    const j = await r.json(); if (!r.ok) throw new Error(j.detail || 'failed');
+    toast('Restored — restart the instance to apply', 'ok');
+  } catch (e) { toast('Restore failed: ' + e.message, 'bad'); }
+  $('instRestoreFile').value = '';
+}
+function closeMenus() { document.querySelectorAll('.menu.show').forEach(m => m.classList.remove('show')); }
+function toggleMenu(e, id) {
+  e.stopPropagation();
+  const m = $('menu-' + id); const open = m.classList.contains('show');
+  closeMenus(); if (!open) m.classList.add('show');
+}
+document.addEventListener('click', closeMenus);
 function toggleDetails(id) {
   if (EXPANDED.has(id)) EXPANDED.delete(id); else { EXPANDED.add(id); loadStats(); }
   renderInstalled();
@@ -781,14 +834,23 @@ function renderInstalled() {
         '<div class="meta" style="margin-top:4px">' + regBadge + statline + '</div>' +
       '</div>' +
       '<div class="row-actions">' + toggle +
-        '<button class="btn btn-line btn-sm" onclick="lifecycle(\'' + it.id + '\',\'restart\')">Restart</button>' +
         '<button class="btn btn-line btn-sm" onclick="openLogs(\'' + it.id + '\')">Logs</button>' +
         '<button class="btn btn-line btn-sm" onclick="registerIntegration(\'' + it.id + '\')" title="Register on the active remote">Register</button>' +
-        '<button class="btn btn-line btn-sm" onclick="openVersion(\'' + it.id + '\')">Version</button>' +
-        '<button class="btn btn-line btn-sm" onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
-        '<button class="btn btn-line btn-sm" onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
         '<button class="btn btn-line btn-sm' + (expanded ? ' det-open' : '') + '" onclick="toggleDetails(\'' + it.id + '\')">Details</button>' +
-        '<button class="btn btn-danger btn-sm" onclick="removeIntegration(\'' + it.id + '\')">Remove</button>' +
+        '<div class="menu-wrap">' +
+          '<button class="btn btn-line btn-sm" onclick="toggleMenu(event,\'' + it.id + '\')">More ▾</button>' +
+          '<div class="menu" id="menu-' + it.id + '">' +
+            '<button onclick="lifecycle(\'' + it.id + '\',\'restart\')">Restart</button>' +
+            '<button onclick="openVersion(\'' + it.id + '\')">Change version</button>' +
+            '<button onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
+            '<button onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
+            '<div class="menu-sep"></div>' +
+            '<button onclick="backupInstance(\'' + it.id + '\')">Backup config</button>' +
+            '<button onclick="restoreInstance(\'' + it.id + '\')">Restore config…</button>' +
+            '<div class="menu-sep"></div>' +
+            '<button class="danger" onclick="removeIntegration(\'' + it.id + '\')">Remove</button>' +
+          '</div>' +
+        '</div>' +
       '</div>' +
       (expanded ? '<div class="details">' + detailsHtml(it) + '</div>' : '');
     box.appendChild(row);
@@ -1321,7 +1383,7 @@ async function init() {
   loadStats();
   if (installedTimer) clearInterval(installedTimer);
   installedTimer = setInterval(() => {
-    if (!document.querySelector('.modal-back.show')) { loadInstalled(); loadRegistrations(); loadStats(); }
+    if (!document.querySelector('.modal-back.show') && !document.querySelector('.menu.show')) { loadInstalled(); loadRegistrations(); loadStats(); }
   }, 6000);
 }
 init();

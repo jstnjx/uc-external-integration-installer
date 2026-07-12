@@ -108,10 +108,12 @@ can revoke over reusing sensitive credentials.
   use **+ Instance** (on its Browse card) to run additional independent copies — each
   gets its own port, `/config`, and a distinct `driver_id` (`base`, `base_2`, …) so
   they register separately on a remote. Rows are labelled `Name`, `Name #2`, …
-- **Install from a release archive.** "Install from file" accepts an Unfolded Circle
-  `.tar.gz` release: it reads `driver.json`, detects the binary's CPU architecture,
-  and runs it in a container. Native ARM64 releases run on an ARM64 host; on a
-  mismatched host it builds for the binary's platform (needs QEMU/binfmt emulation).
+- **Install from a release archive** *(ARM64 hosts only)*. On an ARM64 host, "Install
+  from file" accepts an Unfolded Circle `.tar.gz` release: it reads `driver.json`,
+  detects the binary's architecture, and runs it in a container. The button is hidden
+  on non-ARM64 hosts and the API refuses cross-arch archives, because these releases
+  are native ARM64 binaries — under emulation their mDNS sockets fail (`OSError 92`)
+  and they crash-loop. On x86 hosts, use a source/GHCR install instead.
 - **Activity log** (≣) records installs, registrations, removals, adoptions and alerts.
 - **Maintenance** (⛭): download a **backup** of all config + state, **restore** it,
   **reconcile** (adopt managed containers missing from the list after a reboot or
