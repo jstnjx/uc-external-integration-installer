@@ -153,7 +153,7 @@ def record_event(kind: str, instance_id: str | None, message: str) -> None:
     category = _KIND_TO_CATEGORY.get(kind)
     if category:
         try:
-            notify(category, message)
+            notify(category, message, kind=kind, instance_id=instance_id, timestamp=entry["ts"])
         except Exception:  # noqa: BLE001
             pass
 
@@ -225,32 +225,93 @@ def save_alert_settings(webhook: str, events: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
-def _fire_webhook(message: str, title: str = "UC External Integration Installer") -> bool:
+def _notification_context(category: str, message: str, kind: str | None = None,
+                          instance_id: str | None = None, timestamp: str | None = None) -> dict[str, Any]:
+    """Build a consistent, information-rich notification payload."""
+    labels = {
+        "install": ("Integration installed", "✅", "white_check_mark"),
+        "update": ("Update", "⬆️", "arrow_up"),
+        "register": ("Remote registration", "🔗", "link"),
+        "health": ("Health alert", "❤️", "warning"),
+        "remove": ("Integration removed", "🗑️", "wastebasket"),
+        "maintenance": ("Maintenance", "🛠️", "gear"),
+        "error": ("Installer error", "❌", "rotating_light"),
+    }
+    title, emoji, tag = labels.get(category, ("Installer event", "ℹ️", "information_source"))
+    rec = load_state().get("integrations", {}).get(instance_id or "", {})
+    instance_name = rec.get("label") or rec.get("name") or instance_id
+    ts = timestamp or datetime.now(timezone.utc).isoformat()
+    return {
+        "title": title, "emoji": emoji, "tag": tag, "category": category,
+        "kind": kind or category, "message": message, "timestamp": ts,
+        "instance_id": instance_id, "instance_name": instance_name,
+        "host": socket.gethostname(), "service": service_unit_val(),
+    }
+
+
+def _notification_text(ctx: dict[str, Any]) -> str:
+    lines = [f"{ctx['emoji']} **{ctx['title']}**", "", ctx["message"]]
+    details = []
+    if ctx.get("instance_name"):
+        details.append(f"Integration: `{ctx['instance_name']}`")
+    if ctx.get("instance_id") and ctx.get("instance_id") != ctx.get("instance_name"):
+        details.append(f"Instance ID: `{ctx['instance_id']}`")
+    details.extend([f"Host: `{ctx['host']}`", f"Time: `{ctx['timestamp']}`"])
+    if details:
+        lines.extend(["", "\n".join(details)])
+    return "\n".join(lines)
+
+
+def _fire_webhook(message: str, title: str = "UC External Integration Installer",
+                  category: str = "maintenance", kind: str | None = None,
+                  instance_id: str | None = None, timestamp: str | None = None) -> bool:
     url = load_alert_settings()["webhook"]
     if not url:
         return False
+    ctx = _notification_context(category, message, kind, instance_id, timestamp)
     low = url.lower()
     try:
         if "discord.com/api/webhooks" in low or "discordapp.com/api/webhooks" in low:
-            # Discord requires a "content" field (max 2000 chars); 204 on success.
-            r = httpx.post(url, json={"content": f"**{title}**\n{message}"[:1900]}, timeout=10.0)
+            color = {"error": 15548997, "health": 16753920, "install": 5763719,
+                     "update": 16776960, "register": 5793266, "remove": 15548997}.get(category, 9807270)
+            fields = [{"name": "Host", "value": ctx["host"], "inline": True},
+                      {"name": "Event", "value": ctx["kind"], "inline": True}]
+            if ctx.get("instance_name"):
+                fields.insert(0, {"name": "Integration", "value": str(ctx["instance_name"]), "inline": True})
+            if ctx.get("instance_id"):
+                fields.append({"name": "Instance ID", "value": f"`{ctx['instance_id']}`", "inline": False})
+            payload = {"username": title, "embeds": [{
+                "title": f"{ctx['emoji']} {ctx['title']}",
+                "description": ctx["message"][:3500], "color": color, "fields": fields,
+                "timestamp": ctx["timestamp"],
+                "footer": {"text": f"{ctx['service']} · {ctx['category']}"},
+            }]}
+            r = httpx.post(url, json=payload, timeout=10.0)
         elif "ntfy" in low:
-            r = httpx.post(url, content=message.encode("utf-8"),
-                           headers={"Title": title, "Tags": "gear"}, timeout=10.0)
+            body = _notification_text(ctx).replace("**", "")
+            headers = {"Title": f"{ctx['emoji']} {ctx['title']}", "Tags": ctx["tag"],
+                       "Priority": "high" if category in ("error", "health") else "default",
+                       "Markdown": "yes"}
+            r = httpx.post(url, content=body.encode("utf-8"), headers=headers, timeout=10.0)
         else:
-            # generic: include the field names Slack/Discord/most webhooks look for
-            r = httpx.post(url, json={"title": title, "text": message,
-                                      "message": message, "content": message}, timeout=10.0)
+            text = _notification_text(ctx)
+            payload = {**ctx, "text": text, "content": text, "notification": ctx}
+            r = httpx.post(url, json=payload, timeout=10.0)
         return getattr(r, "status_code", 200) < 400
     except Exception:  # noqa: BLE001
         return False
 
 
-def notify(category: str, message: str) -> None:
+def notify(category: str, message: str, *, kind: str | None = None,
+           instance_id: str | None = None, timestamp: str | None = None) -> None:
     s = load_alert_settings()
     if not s["webhook"] or not s["events"].get(category, False):
         return
-    threading.Thread(target=_fire_webhook, args=(message,), daemon=True).start()
+    threading.Thread(
+        target=_fire_webhook,
+        args=(message, "UC External Integration Installer", category, kind, instance_id, timestamp),
+        daemon=True,
+    ).start()
 
 
 # ---------------------------------------------------------------------------

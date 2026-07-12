@@ -28,7 +28,6 @@
     const panel = document.createElement('section');
     panel.id = 'healthBack';
     panel.className = 'workspace-panel health-page';
-    panel.style.display = 'none';
     panel.innerHTML = `
       <header class="workspace-panel-head health-page-head">
         <div>
@@ -119,7 +118,8 @@
   }
 
   window.refreshHealth = async (manual = false) => {
-    if (refreshing || document.getElementById('healthBack')?.style.display === 'none') return;
+    const panel = document.getElementById('healthBack');
+    if (refreshing || !panel?.classList.contains('show')) return;
     refreshing = true;
     const button = document.getElementById('healthRefreshBtn');
     if (button) { button.disabled = true; button.textContent = '↻ Refreshing…'; }
@@ -128,7 +128,7 @@
       render(data);
     } catch (error) {
       if (!lastData) document.getElementById('healthContent').innerHTML = `<div class="empty"><h3>Health data unavailable</h3><p>${E(error.message || 'The installer did not return health information.')}</p><button class="btn btn-primary" onclick="refreshHealth(true)">Retry</button></div>`;
-      operationNotice?.('Health refresh failed', error.message || 'Could not load health information.', 'failed', {retry: () => refreshHealth(true)});
+      if (typeof window.operationNotice === 'function') window.operationNotice('Health refresh failed', error.message || 'Could not load health information.', 'failed', {retry: () => refreshHealth(true)});
     } finally {
       refreshing = false;
       if (button) { button.disabled = false; button.textContent = '↻ Refresh'; }

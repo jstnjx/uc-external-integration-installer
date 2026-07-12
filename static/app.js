@@ -6,7 +6,7 @@ let UPDATES = {};   // integration_id -> {update_available, latest_version, inst
 let REGS = {};      // integration_id -> [{remote_id, remote_name}]
 let STATS = {};     // integration_id -> {cpu_pct, mem_used, mem_limit, pids, started_at, health, status}
 const EXPANDED = new Set();  // ids whose details panel is open
-let TAB = 'browse';
+let TAB = 'installed';
 let cfgMode = 'install';   // install | version | config
 let cfgTarget = null;
 let cfgIntegration = null;  // parent integration id (for version lookups)
@@ -120,7 +120,7 @@ async function loadHealth() {
     const rc = h.registry_commit ? (' · ' + h.registry_commit) : '';
     $('regInfo').textContent = h.registry_ok ? ('registry v' + (h.registry_version || '?') + rc) : 'registry down';
     if (h.token_required) { $('lockStat').style.display = 'flex'; if (!token()) $('lockbar').classList.add('show'); }
-    $('brandSub').textContent = 'external integrations · port ' + h.port_start + '+';
+
     if ($('archiveBtn')) $('archiveBtn').style.display = h.archive_supported ? '' : 'none';
     return h;
   } catch (e) { return {}; }
@@ -195,6 +195,21 @@ async function loadUpdates() {
 }
 async function loadRegistrations() {
   try { REGS = await api('/api/registrations'); updateOverview(); renderInstalled(); } catch (e) {}
+}
+async function refreshInstalledData(includeUpdates = false) {
+  try {
+    const requests = [api('/api/installed'), api('/api/registrations'), api('/api/stats')];
+    if (includeUpdates) requests.push(api('/api/updates'));
+    const results = await Promise.all(requests);
+    INSTALLED = results[0] || [];
+    REGS = results[1] || {};
+    STATS = results[2] || {};
+    if (includeUpdates) UPDATES = results[3] || {};
+    if ($('installedCount')) $('installedCount').textContent = INSTALLED.length;
+    updateOverview();
+    renderInstalled();
+    if (TAB === 'browse') renderBrowse();
+  } catch (e) {}
 }
 function statusLed(s) {
   if (s === 'running') return '<span class="led on running-pulse"></span>';
@@ -544,7 +559,7 @@ function followJob(jobId, title) {
     $('jobSub').innerHTML = job.status === 'success' ? '✓ complete' : '✕ failed';
     $('jobClose').style.display = 'block';
     $('jobDone').style.display = 'block';
-    if (job.status === 'success') { toast(title.split(' ')[0] + ' complete', 'ok'); loadInstalled(); loadUpdates(); loadRegistrations(); }
+    if (job.status === 'success') { toast(title.split(' ')[0] + ' complete', 'ok'); refreshInstalledData(true); }
     else toast('Job failed — see log', 'bad');
   };
   poll();
@@ -1137,7 +1152,7 @@ function switchTab(t) {
   $('tabBrowseBtn').classList.toggle('active', t === 'browse');
   $('tabInstalledBtn').classList.toggle('active', t === 'installed');
   if ($('workspaceHint')) $('workspaceHint').textContent = t === 'installed' ? 'Operate containers, versions, registration, and runtime health.' : 'Find integrations from the configured registry.';
-  if (t === 'installed') { loadInstalled(); loadStats(); }
+  if (t === 'installed') refreshInstalledData(false);
   if (t === 'browse') renderBrowse();
 }
 function hideAllWorkspacePanels() {
@@ -1234,15 +1249,12 @@ async function init() {
   if (h.token_required && !token()) return;   // wait for unlock
   if (h.setup_complete === false) { openSetup(); return; }  // first-run wizard
   try { await loadRegistry(false); } catch (e) {}
-  await loadInstalled();
+  await refreshInstalledData(true);
   loadUpdateStatus();
   loadRemotes();
-  loadUpdates();
-  loadRegistrations();
-  loadStats();
   if (installedTimer) clearInterval(installedTimer);
   installedTimer = setInterval(() => {
-    if (!document.querySelector('.workspace-panel.show') && !document.querySelector('.menu.show')) { loadInstalled(); loadRegistrations(); loadStats(); }
+    if (!document.querySelector('.workspace-panel.show') && !document.querySelector('.menu.show')) refreshInstalledData(false);
   }, 6000);
 }
 
@@ -1344,7 +1356,7 @@ function setHash(route,replace=false){ const h='#/'+route; if(location.hash!==h)
 const _switchTab=switchTab; switchTab=function(t){ _switchTab(t); setHash(t); };
 const _showWorkspacePanel=showWorkspacePanel; showWorkspacePanel=function(id){ _showWorkspacePanel(id); setHash(routeForPanel(id)); };
 const _hideWorkspacePanel=hideWorkspacePanel; hideWorkspacePanel=function(id){ _hideWorkspacePanel(id); setHash(TAB||'browse'); };
-function applyRoute(){ const r=(location.hash||'#/browse').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='health'){openHealth();return;} if(r==='settings'){openMaint();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
+function applyRoute(){ const r=(location.hash||'#/installed').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='health'){openHealth();return;} if(r==='settings'){openMaint();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
 window.addEventListener('popstate',applyRoute);
 
 const OPERATION_TTL = { success: 12000, failed: 30000 };
@@ -1392,7 +1404,7 @@ function followJob(jobId,title){
   const poll=async()=>{let job;try{job=await api('/api/jobs/'+jobId);}catch(e){updateOperation(jobId,{status:'failed',lines:[e.message]});return;}
     updateOperation(jobId,{status:job.status,lines:job.lines||[],progress:Math.min(90,10+(job.lines||[]).length*3)});
     if(job.status==='running'){setTimeout(poll,900);return;}
-    if(job.status==='success'){toast(title.split(' ')[0]+' complete','ok');loadInstalled();loadUpdates();loadRegistrations();}
+    if(job.status==='success'){toast(title.split(' ')[0]+' complete','ok');refreshInstalledData(true);}
     else toast('Job failed — open Operations for details','bad');
   };
   poll(); const drawer=$('operationDrawer'); if(drawer){drawer.classList.remove('hidden');drawer.classList.add('open');drawer.querySelector('.operation-head')?.setAttribute('aria-expanded','true');requestAnimationFrame(updateFloatingOffsets);}
@@ -1423,6 +1435,6 @@ const _saveMainSettings=saveMainSettings;
 window.addEventListener('beforeunload',e=>{if(formDirty('maintBack')||formDirty('cfgBack')||formDirty('remBack')){e.preventDefault();e.returnValue='';}});
 
 restoreInstalledView();
-setTimeout(()=>{if(location.hash)applyRoute();else setHash('browse',true);},0);
+setTimeout(()=>{if(location.hash)applyRoute();else setHash('installed',true);},0);
 
 init();

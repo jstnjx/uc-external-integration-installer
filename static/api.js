@@ -3,7 +3,7 @@ window.AppStore = (() => {
   const listeners = new Set();
   const saved = JSON.parse(localStorage.getItem('uc_ui_state_v3') || '{}');
   const state = {
-    route: saved.route || 'browse',
+    route: saved.route || 'installed',
     selected: new Set(),
     expanded: new Set(saved.expanded || []),
     filters: saved.filters || {},

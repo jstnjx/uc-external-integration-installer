@@ -6,7 +6,7 @@
   const crumbs=document.createElement('nav'); crumbs.id='breadcrumbs'; crumbs.className='breadcrumbs'; crumbs.setAttribute('aria-label','Breadcrumb');
   const main=document.querySelector('main'); main?.prepend(crumbs);
   function labelFor(route){ if(route.startsWith('logs/')) return ['Installed',decodeURIComponent(route.slice(5)),'Logs']; if(route==='installer-logs')return ['Logs','Installer service']; if(route.startsWith('configure/'))return ['Installed',decodeURIComponent(route.slice(10)),'Configure']; if(route==='update')return ['Settings','Updates']; return [route.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase())]; }
-  function renderBreadcrumbs(){ const route=(location.hash||'#/browse').replace(/^#\/?/,''); const parts=labelFor(route); crumbs.innerHTML=parts.map((p,i)=>'<span'+(i===parts.length-1?' aria-current="page"':'')+'>'+esc(p)+'</span>').join('<b>›</b>'); crumbs.style.display=parts.length>1?'flex':'none'; AppStore.set({route}); }
+  function renderBreadcrumbs(){ const route=(location.hash||'#/installed').replace(/^#\/?/,''); const parts=labelFor(route); crumbs.innerHTML=parts.map((p,i)=>'<span'+(i===parts.length-1?' aria-current="page"':'')+'>'+esc(p)+'</span>').join('<b>›</b>'); crumbs.style.display=parts.length>1?'flex':'none'; AppStore.set({route}); }
   window.addEventListener('hashchange',renderBreadcrumbs); renderBreadcrumbs();
 
   const originalApi=window.api;

@@ -5,10 +5,11 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>UC External Integration Installer</title>
+<link rel="icon" href="/static/favicon.svg?v=5.3.0" type="image/svg+xml"/>
 <link href="https://fonts.googleapis.com" rel="preconnect"/>
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
-<link rel="stylesheet" href="/static/styles.css?v=4.1.0">
+<link rel="stylesheet" href="/static/styles.css?v=5.3.0">
 </head>
 <body>
 <header class="bar">
@@ -17,7 +18,7 @@
 <div class="logo"><span></span></div>
 <div>
 <h1>UC External Integration Installer</h1>
-<p id="brandSub">external integrations · docker host</p>
+
 </div>
 </div>
 <div aria-label="System health" class="header-health">
@@ -63,14 +64,14 @@
 </section>
 <div class="workspace-nav">
 <div class="tabs">
-<button class="tab active" id="tabBrowseBtn" onclick="switchTab('browse')">Browse
+<button class="tab" id="tabBrowseBtn" onclick="switchTab('browse')">Browse
         <span class="count" id="browseCount"></span></button>
-<button class="tab" id="tabInstalledBtn" onclick="switchTab('installed')">Installed
+<button class="tab active" id="tabInstalledBtn" onclick="switchTab('installed')">Installed
         <span class="count" id="installedCount"></span></button>
 </div>
-<div class="workspace-hint" id="workspaceHint">Find integrations from the configured registry.</div>
+<div class="workspace-hint" id="workspaceHint">Operate containers, versions, registration, and runtime health.</div>
 </div>
-<section id="browse">
+<section id="browse" style="display:none">
 <div class="section-head">
 <div><h3>Integration catalog</h3><p>Install supported integrations or create additional instances.</p></div>
 <div class="section-actions">
@@ -85,10 +86,10 @@
 </div>
 <div class="grid" id="browseGrid"></div>
 </section>
-<section id="installed" style="display:none">
+<section id="installed">
 <div class="section-head">
 <div><h3>Installed instances</h3><p>Monitor runtime state, manage versions, and register drivers.</p></div>
-<button class="btn btn-line" onclick="loadInstalled();loadUpdates();loadRegistrations();loadStats()">↻ Refresh status</button>
+<button class="btn btn-line" onclick="refreshInstalledData(true)">↻ Refresh status</button>
 </div>
 <div class="control-bar installed-controls">
 <div class="search"><input id="installedSearch" oninput="renderInstalled();saveInstalledView()" placeholder="Search name, ID, driver, port, or repository…"/></div>
@@ -382,16 +383,16 @@
 <aside class="operation-drawer hidden" id="operationDrawer" aria-label="Operations"><button class="operation-head" onclick="toggleOperationDrawer()" aria-expanded="false"><span>Operations</span><span id="operationSummary">No active operations</span><b class="operation-chevron" id="operationChevron">⌄</b></button><div class="operation-list" id="operationList"></div></aside>
 <button class="back-to-top" id="backToTop" type="button" aria-label="Back to top" title="Back to top" onclick="scrollToTop()"><span>↑</span></button>
 <div id="toasts"></div>
-<script src="/static/api.js?v=4.0.0"></script>
-<script src="/static/app.js?v=4.0.0"></script>
-<script src="/static/navigation.js?v=4.0.0"></script>
-<script src="/static/dialogs.js?v=4.0.0"></script>
-<script src="/static/logs.js?v=4.0.0"></script>
-<script src="/static/installed.js?v=4.0.0"></script>
-<script src="/static/remotes.js?v=4.0.0"></script>
-<script src="/static/settings.js?v=4.0.0"></script>
-<script src="/static/operations.js?v=4.0.0"></script>
-<script src="/static/enhancements.js?v=4.1.0"></script>
-<script src="/static/health.js?v=4.1.0"></script>
+<script src="/static/api.js?v=5.3.0"></script>
+<script src="/static/app.js?v=5.3.0"></script>
+<script src="/static/navigation.js?v=5.3.0"></script>
+<script src="/static/dialogs.js?v=5.3.0"></script>
+<script src="/static/logs.js?v=5.3.0"></script>
+<script src="/static/installed.js?v=5.3.0"></script>
+<script src="/static/remotes.js?v=5.3.0"></script>
+<script src="/static/settings.js?v=5.3.0"></script>
+<script src="/static/operations.js?v=5.3.0"></script>
+<script src="/static/enhancements.js?v=5.3.0"></script>
+<script src="/static/health.js?v=5.3.0"></script>
 </body>
 </html>
