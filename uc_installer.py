@@ -3,17 +3,6 @@
 UC External Integration Installer
 ======================
 
-A small self-hosted service that runs in the background on a Docker host and
-exposes a web UI to browse, install, configure and manage Unfolded Circle
-external integrations.
-
-It replaces the old shell installer:
-  - fetches the community registry
-  - lets you pick integrations from a modern web UI
-  - prefers a GHCR image, falls back to building from source
-  - runs each integration as a labelled Docker container (host networking)
-  - lets you start / stop / restart / reconfigure / remove them and read logs
-
 Run directly:
     python uc_installer.py
 
@@ -52,7 +41,7 @@ from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -91,6 +80,10 @@ ALERT_WEBHOOK = os.environ.get("UC_INSTALLER_ALERT_WEBHOOK", "").strip()
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
 APP_DIR = HERE  # the installed code directory / git checkout root
+
+PROCESS_STARTED_AT = time.time()
+_host_cpu_lock = threading.Lock()
+_host_cpu_sample: tuple[int, int] | None = None
 
 
 def _resolve_data_dir() -> Path:
@@ -149,7 +142,7 @@ def record_event(kind: str, instance_id: str | None, message: str) -> None:
     category = _KIND_TO_CATEGORY.get(kind)
     if category:
         try:
-            notify(category, message)
+            notify(category, message, kind=kind, instance_id=instance_id, timestamp=entry["ts"])
         except Exception:  # noqa: BLE001
             pass
 
@@ -221,32 +214,93 @@ def save_alert_settings(webhook: str, events: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
-def _fire_webhook(message: str, title: str = "UC External Integration Installer") -> bool:
+def _notification_context(category: str, message: str, kind: str | None = None,
+                          instance_id: str | None = None, timestamp: str | None = None) -> dict[str, Any]:
+    """Build a consistent, information-rich notification payload."""
+    labels = {
+        "install": ("Integration installed", "✅", "white_check_mark"),
+        "update": ("Update", "⬆️", "arrow_up"),
+        "register": ("Remote registration", "🔗", "link"),
+        "health": ("Health alert", "❤️", "warning"),
+        "remove": ("Integration removed", "🗑️", "wastebasket"),
+        "maintenance": ("Maintenance", "🛠️", "gear"),
+        "error": ("Installer error", "❌", "rotating_light"),
+    }
+    title, emoji, tag = labels.get(category, ("Installer event", "ℹ️", "information_source"))
+    rec = load_state().get("integrations", {}).get(instance_id or "", {})
+    instance_name = rec.get("label") or rec.get("name") or instance_id
+    ts = timestamp or datetime.now(timezone.utc).isoformat()
+    return {
+        "title": title, "emoji": emoji, "tag": tag, "category": category,
+        "kind": kind or category, "message": message, "timestamp": ts,
+        "instance_id": instance_id, "instance_name": instance_name,
+        "host": socket.gethostname(), "service": service_unit_val(),
+    }
+
+
+def _notification_text(ctx: dict[str, Any]) -> str:
+    lines = [f"{ctx['emoji']} **{ctx['title']}**", "", ctx["message"]]
+    details = []
+    if ctx.get("instance_name"):
+        details.append(f"Integration: `{ctx['instance_name']}`")
+    if ctx.get("instance_id") and ctx.get("instance_id") != ctx.get("instance_name"):
+        details.append(f"Instance ID: `{ctx['instance_id']}`")
+    details.extend([f"Host: `{ctx['host']}`", f"Time: `{ctx['timestamp']}`"])
+    if details:
+        lines.extend(["", "\n".join(details)])
+    return "\n".join(lines)
+
+
+def _fire_webhook(message: str, title: str = "UC External Integration Installer",
+                  category: str = "maintenance", kind: str | None = None,
+                  instance_id: str | None = None, timestamp: str | None = None) -> bool:
     url = load_alert_settings()["webhook"]
     if not url:
         return False
+    ctx = _notification_context(category, message, kind, instance_id, timestamp)
     low = url.lower()
     try:
         if "discord.com/api/webhooks" in low or "discordapp.com/api/webhooks" in low:
-            # Discord requires a "content" field (max 2000 chars); 204 on success.
-            r = httpx.post(url, json={"content": f"**{title}**\n{message}"[:1900]}, timeout=10.0)
+            color = {"error": 15548997, "health": 16753920, "install": 5763719,
+                     "update": 16776960, "register": 5793266, "remove": 15548997}.get(category, 9807270)
+            fields = [{"name": "Host", "value": ctx["host"], "inline": True},
+                      {"name": "Event", "value": ctx["kind"], "inline": True}]
+            if ctx.get("instance_name"):
+                fields.insert(0, {"name": "Integration", "value": str(ctx["instance_name"]), "inline": True})
+            if ctx.get("instance_id"):
+                fields.append({"name": "Instance ID", "value": f"`{ctx['instance_id']}`", "inline": False})
+            payload = {"username": title, "embeds": [{
+                "title": f"{ctx['emoji']} {ctx['title']}",
+                "description": ctx["message"][:3500], "color": color, "fields": fields,
+                "timestamp": ctx["timestamp"],
+                "footer": {"text": f"{ctx['service']} · {ctx['category']}"},
+            }]}
+            r = httpx.post(url, json=payload, timeout=10.0)
         elif "ntfy" in low:
-            r = httpx.post(url, content=message.encode("utf-8"),
-                           headers={"Title": title, "Tags": "gear"}, timeout=10.0)
+            body = _notification_text(ctx).replace("**", "")
+            headers = {"Title": f"{ctx['emoji']} {ctx['title']}", "Tags": ctx["tag"],
+                       "Priority": "high" if category in ("error", "health") else "default",
+                       "Markdown": "yes"}
+            r = httpx.post(url, content=body.encode("utf-8"), headers=headers, timeout=10.0)
         else:
-            # generic: include the field names Slack/Discord/most webhooks look for
-            r = httpx.post(url, json={"title": title, "text": message,
-                                      "message": message, "content": message}, timeout=10.0)
+            text = _notification_text(ctx)
+            payload = {**ctx, "text": text, "content": text, "notification": ctx}
+            r = httpx.post(url, json=payload, timeout=10.0)
         return getattr(r, "status_code", 200) < 400
     except Exception:  # noqa: BLE001
         return False
 
 
-def notify(category: str, message: str) -> None:
+def notify(category: str, message: str, *, kind: str | None = None,
+           instance_id: str | None = None, timestamp: str | None = None) -> None:
     s = load_alert_settings()
     if not s["webhook"] or not s["events"].get(category, False):
         return
-    threading.Thread(target=_fire_webhook, args=(message,), daemon=True).start()
+    threading.Thread(
+        target=_fire_webhook,
+        args=(message, "UC External Integration Installer", category, kind, instance_id, timestamp),
+        daemon=True,
+    ).start()
 
 
 # ---------------------------------------------------------------------------
@@ -1715,6 +1769,17 @@ class ActiveRemoteBody(BaseModel):
     id: str | None = None
 
 
+class UpdatePolicyBody(BaseModel):
+    mode: str = "off"  # off | notify | stable | prerelease | scheduled
+    delay_days: int = 0
+    maintenance_window: str = ""
+
+
+class SettingsImportBody(BaseModel):
+    payload: dict[str, Any]
+
+
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -2038,7 +2103,7 @@ def api_logs(instance_id: str, tail: int = 300):
     c = _container_for(instance_id)
     if c is None:
         raise HTTPException(404, "Container not found")
-    logs = c.logs(tail=tail, timestamps=False).decode("utf-8", "replace")
+    logs = c.logs(tail=tail, timestamps=True).decode("utf-8", "replace")
     return {"logs": logs}
 
 
@@ -2052,7 +2117,7 @@ def api_logs_stream(instance_id: str, tail: int = 200):
 
     def gen():
         try:
-            for line in c.logs(stream=True, follow=True, tail=tail):
+            for line in c.logs(stream=True, follow=True, tail=tail, timestamps=True):
                 text = line.decode("utf-8", "replace").rstrip("\n")
                 yield f"data: {text}\n\n"
         except Exception:  # noqa: BLE001
@@ -2501,8 +2566,330 @@ def api_remotes_unregister(rid: str, driver_id: str) -> dict[str, str]:
     if r.status_code in (200, 204):
         with _remote_drivers_lock:
             _remote_drivers_cache.pop(rid, None)
+        record_event("register", None, f"unregistered {driver_id} from {remote.get('name', rid)}")
         return {"status": "unregistered", "driver_id": driver_id}
     raise HTTPException(502, f"Remote returned {r.status_code}")
+
+
+# ---- comprehensive health overview ------------------------------------------
+
+
+def _read_proc_stat_cpu() -> tuple[int, int] | None:
+    try:
+        fields = Path("/proc/stat").read_text().splitlines()[0].split()[1:]
+        values = [int(v) for v in fields]
+        idle = values[3] + (values[4] if len(values) > 4 else 0)
+        return sum(values), idle
+    except Exception:
+        return None
+
+
+def _host_cpu_percent() -> float | None:
+    global _host_cpu_sample
+    current = _read_proc_stat_cpu()
+    if current is None:
+        return None
+    with _host_cpu_lock:
+        previous = _host_cpu_sample
+        _host_cpu_sample = current
+    if previous is None:
+        return None
+    total_delta = current[0] - previous[0]
+    idle_delta = current[1] - previous[1]
+    if total_delta <= 0:
+        return None
+    return round(max(0.0, min(100.0, (1.0 - idle_delta / total_delta) * 100.0)), 1)
+
+
+def _host_memory() -> dict[str, Any]:
+    out: dict[str, int] = {}
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, value = line.split(":", 1)
+            out[key] = int(value.strip().split()[0]) * 1024
+    except Exception:
+        pass
+    total = out.get("MemTotal", 0)
+    available = out.get("MemAvailable", out.get("MemFree", 0))
+    used = max(0, total - available)
+    swap_total = out.get("SwapTotal", 0)
+    swap_free = out.get("SwapFree", 0)
+    return {
+        "total": total, "used": used, "available": available,
+        "percent": round(used / total * 100.0, 1) if total else None,
+        "swap_total": swap_total, "swap_used": max(0, swap_total - swap_free),
+    }
+
+
+def _host_uptime() -> float | None:
+    try:
+        return float(Path("/proc/uptime").read_text().split()[0])
+    except Exception:
+        return None
+
+
+def _process_memory() -> int | None:
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return None
+
+
+def _managed_docker_health() -> dict[str, Any]:
+    records = load_state().get("integrations", {})
+    cached = api_stats() if docker_available() else {}
+    containers: list[dict[str, Any]] = []
+    totals = {"cpu_pct": 0.0, "mem_used": 0, "mem_limit": 0, "pids": 0, "restarts": 0}
+    states: dict[str, int] = {}
+    healthy = unhealthy = unknown = 0
+    for iid, rec in records.items():
+        stat = cached.get(iid, {})
+        status = stat.get("status") or rec.get("status") or "unknown"
+        health_state = stat.get("health") or ("unknown" if status == "running" else "not-running")
+        states[status] = states.get(status, 0) + 1
+        if health_state in ("healthy", "responding"):
+            healthy += 1
+        elif health_state in ("unhealthy", "unreachable"):
+            unhealthy += 1
+        else:
+            unknown += 1
+        cpu = float(stat.get("cpu_pct") or 0)
+        mem = int(stat.get("mem_used") or 0)
+        limit = int(stat.get("mem_limit") or 0)
+        pids = int(stat.get("pids") or 0)
+        restarts = int(stat.get("restart_count") or rec.get("restart_count") or 0)
+        totals["cpu_pct"] += cpu; totals["mem_used"] += mem; totals["mem_limit"] += limit
+        totals["pids"] += pids; totals["restarts"] += restarts
+        containers.append({
+            "id": iid, "name": rec.get("label") or rec.get("name") or iid,
+            "status": status, "health": health_state, "cpu_pct": cpu,
+            "mem_used": mem, "mem_limit": limit, "pids": pids,
+            "restarts": restarts, "port": rec.get("port"),
+            "started_at": stat.get("started_at"),
+        })
+    totals["cpu_pct"] = round(totals["cpu_pct"], 1)
+    return {
+        "available": docker_available(), "managed_count": len(records),
+        "states": states, "healthy": healthy, "unhealthy": unhealthy, "unknown": unknown,
+        "totals": totals, "containers": containers,
+    }
+
+
+def _remote_health_overview() -> list[dict[str, Any]]:
+    remote_data = load_remotes()
+    items = list(remote_data.get("remotes", {}).items())
+    active = remote_data.get("active")
+    if not items:
+        return []
+
+    def check(item: tuple[str, dict[str, Any]]) -> dict[str, Any]:
+        rid, remote = item
+        started = time.perf_counter()
+        reachable = False; status_code = None; drivers = 0; error = None
+        try:
+            response = remote_request(remote, "GET", "/intg/drivers?limit=100&page=1", timeout=3.0)
+            status_code = response.status_code
+            reachable = response.status_code < 400
+            if reachable:
+                try:
+                    drivers = int(response.headers.get("Pagination-Count", len(response.json() or [])))
+                except Exception:
+                    drivers = 0
+        except Exception as exc:
+            error = str(exc)
+        latency = round((time.perf_counter() - started) * 1000)
+        return {
+            "id": rid, "name": remote.get("name") or rid,
+            "address": f"{remote.get('scheme', 'http')}://{remote.get('host')}:{remote.get('port')}",
+            "reachable": reachable, "latency_ms": latency, "status_code": status_code,
+            "drivers": drivers, "active": rid == active,
+            "auth": "API key" if remote.get("api_key") else "PIN",
+            "error": error,
+        }
+
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=min(8, len(items))) as executor:
+        return list(executor.map(check, items))
+
+
+@app.get("/api/health/overview", dependencies=[Depends(require_token)])
+def api_health_overview() -> dict[str, Any]:
+    disk = shutil.disk_usage(DATA_DIR)
+    try:
+        load1, load5, load15 = os.getloadavg()
+    except (AttributeError, OSError):
+        load1 = load5 = load15 = None
+    registry_ok = True
+    registry_version = None
+    try:
+        registry = fetch_registry()
+        registry_version = registry.get("version")
+    except Exception:
+        registry_ok = False
+    docker = _managed_docker_health()
+    remotes = _remote_health_overview()
+    uptime = max(0.0, time.time() - PROCESS_STARTED_AT)
+    installer_mem = _process_memory()
+    running_jobs = sum(1 for j in JOBS.values() if j.status == "running")
+    failed_jobs = sum(1 for j in JOBS.values() if j.status == "failed")
+    recent_errors = len([e for e in load_events(100) if e.get("kind") == "error"])
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "host": {
+            "hostname": socket.gethostname(), "platform": platform.platform(),
+            "architecture": platform.machine(), "cpu_count": os.cpu_count(),
+            "cpu_pct": _host_cpu_percent(), "load": [load1, load5, load15],
+            "memory": _host_memory(), "uptime_seconds": _host_uptime(),
+            "disk": {"path": str(DATA_DIR), "total": disk.total, "used": disk.used, "free": disk.free,
+                     "percent": round(disk.used / disk.total * 100.0, 1) if disk.total else None},
+        },
+        "docker": docker,
+        "remotes": remotes,
+        "installer": {
+            "status": "healthy" if docker.get("available") and registry_ok else "degraded",
+            "version": app.version, "build": current_commit().get("short"),
+            "uptime_seconds": uptime, "memory_rss": installer_mem,
+            "threads": threading.active_count(), "active_jobs": running_jobs,
+            "failed_jobs": failed_jobs, "recent_errors": recent_errors,
+            "registry_ok": registry_ok, "registry_version": registry_version,
+            "registry_commit": registry_commit(), "health_probe": health_probe_on(),
+            "token_required": bool(token_val()), "service_unit": service_unit_val(),
+            "bind": f"{os.environ.get('UC_INSTALLER_HOST', '0.0.0.0')}:{os.environ.get('UC_INSTALLER_PORT', '8900')}",
+            "data_dir": str(DATA_DIR),
+        },
+    }
+
+
+# ---- diagnostics, settings portability, registration preflight --------------
+
+
+def _tcp_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+@app.get("/api/remotes/{rid}/registration-preflight/{instance_id}", dependencies=[Depends(require_token)])
+def api_registration_preflight(rid: str, instance_id: str) -> dict[str, Any]:
+    remote = _get_remote_or_404(rid)
+    rec = load_state()["integrations"].get(instance_id)
+    if not rec:
+        raise HTTPException(404, "Instance is not installed")
+    entry = find_integration(rec.get("integration_id", instance_id)) or {}
+    advertise = remote.get("advertise_ip") or detect_host_ip(remote["host"])
+    payload = build_driver_payload(entry, rec, advertise or "0.0.0.0", int(rec.get("port") or 0))
+    issues: list[dict[str, Any]] = []
+    reachable = True
+    drivers: list[dict[str, Any]] = []
+    try:
+        drivers = remote_all_drivers(remote)
+    except Exception as exc:
+        reachable = False
+        issues.append({"code": "remote_unreachable", "severity": "error", "message": f"Remote unreachable: {exc}"})
+    if rec.get("status") not in (None, "running"):
+        issues.append({"code": "integration_stopped", "severity": "error", "message": "Integration is not running"})
+    if not advertise:
+        issues.append({"code": "advertise_ip_missing", "severity": "error", "message": "Advertise IP could not be determined"})
+    if advertise and not _tcp_reachable(advertise, int(rec.get("port") or 0)):
+        issues.append({"code": "port_unreachable", "severity": "warning", "message": f"Integration port {rec.get('port')} is not reachable on {advertise}"})
+    same_id = next((d for d in drivers if d.get("driver_id") == payload["driver_id"]), None)
+    same_url = next((d for d in drivers if d.get("driver_url") == payload["driver_url"]), None)
+    if same_id:
+        issues.append({"code": "driver_id_exists", "severity": "warning", "message": "Driver ID is already registered", "driver": same_id})
+    if same_url and not same_id:
+        issues.append({"code": "driver_url_exists", "severity": "warning", "message": "The same driver URL is already registered", "driver": same_url})
+    return {"ok": reachable and not any(i["severity"] == "error" for i in issues), "reachable": reachable,
+            "driver_id": payload["driver_id"], "driver_url": payload["driver_url"], "issues": issues}
+
+
+@app.get("/api/diagnostics", dependencies=[Depends(require_token)])
+def api_diagnostics() -> dict[str, Any]:
+    docker_version = None
+    disk = shutil.disk_usage(DATA_DIR)
+    try:
+        docker_version = get_docker().version().get("Version")
+    except Exception:
+        pass
+    remotes = load_remotes()
+    remote_summary = []
+    for rid, r in remotes.get("remotes", {}).items():
+        ok = False
+        try:
+            ok = remote_request(r, "GET", "/intg/drivers?limit=1", timeout=2.0).status_code < 400
+        except Exception:
+            pass
+        remote_summary.append({"id": rid, "name": r.get("name"), "reachable": ok})
+    recent_errors = [e for e in load_events(200) if e.get("kind") == "error"][:20]
+    return {
+        "installer_version": app.version,
+        "python_version": platform.python_version(),
+        "docker_version": docker_version,
+        "data_dir": str(DATA_DIR),
+        "service_unit": service_unit_val(),
+        "registry_url": registry_url_val(),
+        "registry_commit": registry_commit(),
+        "active_jobs": sum(1 for j in JOBS.values() if j.status == "running"),
+        "installed_integrations": len(load_state().get("integrations", {})),
+        "remotes": remote_summary,
+        "disk": {"total": disk.total, "used": disk.used, "free": disk.free},
+        "recent_errors": recent_errors,
+    }
+
+
+@app.get("/api/settings/export", dependencies=[Depends(require_token)])
+def api_settings_export() -> dict[str, Any]:
+    remotes = load_remotes()
+    safe_remotes = []
+    for r in remotes.get("remotes", {}).values():
+        m = _mask(r)
+        m.pop("has_pin", None); m.pop("has_api_key", None)
+        safe_remotes.append(m)
+    return {"version": 1, "settings": {k:v for k,v in load_settings().items() if k != "token"},
+            "alerts": {"events": load_alert_settings().get("events", {})},
+            "remotes": safe_remotes}
+
+
+@app.post("/api/settings/import", dependencies=[Depends(require_token)])
+def api_settings_import(body: SettingsImportBody) -> dict[str, Any]:
+    payload = body.payload or {}
+    settings = payload.get("settings") or {}
+    allowed = {k:v for k,v in settings.items() if k in {"port_start","registry_url","update_repo","update_branch","update_service","health_probe"}}
+    save_settings(allowed)
+    alerts = payload.get("alerts") or {}
+    if isinstance(alerts.get("events"), dict):
+        cur = load_alert_settings(); save_alert_settings(cur.get("webhook", ""), alerts["events"])
+    record_event("state", None, "settings imported")
+    return {"ok": True, "imported": list(allowed)}
+
+
+@app.post("/api/service/restart", dependencies=[Depends(require_token)])
+def api_service_restart() -> dict[str, Any]:
+    if not _can_restart_service():
+        raise HTTPException(409, f"Service restart is not available; restart {service_unit_val()} manually")
+    record_event("state", None, f"installer service restart requested: {service_unit_val()}")
+    subprocess.Popen(["systemd-run", "--no-block", "--collect", "systemctl", "restart", service_unit_val()],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"ok": True, "service": service_unit_val()}
+
+
+@app.put("/api/instances/{instance_id}/update-policy", dependencies=[Depends(require_token)])
+def api_update_policy(instance_id: str, body: UpdatePolicyBody) -> dict[str, Any]:
+    if body.mode not in {"off", "notify", "stable", "prerelease", "scheduled"}:
+        raise HTTPException(400, "Invalid update policy")
+    with _state_lock:
+        state = load_state(); rec = state.get("integrations", {}).get(instance_id)
+        if not rec: raise HTTPException(404, "Instance is not installed")
+        rec["update_policy"] = {"mode": body.mode, "delay_days": max(0, int(body.delay_days)),
+                                "maintenance_window": body.maintenance_window.strip()}
+        rec["auto_update"] = body.mode in {"stable", "prerelease", "scheduled"}
+        save_state(state)
+    record_event("state", instance_id, f"update policy changed to {body.mode}")
+    return rec["update_policy"]
 
 
 # ---- events, backup, maintenance -------------------------------------------
@@ -2591,38 +2978,86 @@ async def api_instance_restore(instance_id: str, file: UploadFile = File(...)) -
     return {"status": "restored", "note": "Restart or rebuild the instance to apply."}
 
 
+
+class ReconcileOptions(BaseModel):
+    adopt: bool = True
+    remove_stale: bool = False
+    restart_stopped: bool = False
+
+
+class PruneOptions(BaseModel):
+    unused_local: bool = True
+    dangling: bool = True
+    build_cache: bool = False
+
 @app.post("/api/maintenance/prune", dependencies=[Depends(require_token)])
-def api_prune() -> dict[str, Any]:
+def api_prune(options: PruneOptions | None = None) -> dict[str, Any]:
+    options = options or PruneOptions()
     if not docker_available():
         raise HTTPException(503, "Docker is not available")
     client = get_docker()
     in_use = {rec.get("image") for rec in load_state()["integrations"].values()}
-    removed = []
-    try:
-        for img in client.images.list():
-            tags = img.tags or []
-            local = [t for t in tags if t.startswith("uc-local/")]
-            if local and not any(t in in_use for t in tags):
-                try:
-                    client.images.remove(img.id, force=True)
-                    removed.extend(local)
-                except Exception:  # noqa: BLE001
-                    pass
-    except Exception:  # noqa: BLE001
-        pass
+    removed: list[str] = []
     reclaimed = 0
-    try:
-        reclaimed = (client.images.prune(filters={"dangling": True}) or {}).get("SpaceReclaimed", 0)
-    except Exception:  # noqa: BLE001
-        pass
-    record_event("state", None, f"pruned {len(removed)} build image(s)")
+    if options.unused_local:
+        try:
+            for img in client.images.list():
+                tags = img.tags or []
+                local = [t for t in tags if t.startswith("uc-local/")]
+                if local and not any(t in in_use for t in tags):
+                    try:
+                        client.images.remove(img.id, force=True)
+                        removed.extend(local)
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001
+            pass
+    if options.dangling:
+        try:
+            reclaimed += int((client.images.prune(filters={"dangling": True}) or {}).get("SpaceReclaimed", 0))
+        except Exception:  # noqa: BLE001
+            pass
+    if options.build_cache:
+        try:
+            reclaimed += int((client.api.prune_builds() or {}).get("SpaceReclaimed", 0))
+        except Exception:  # noqa: BLE001
+            pass
+    record_event("state", None, f"pruned {len(removed)} build image(s), reclaimed {reclaimed} bytes")
     return {"removed": removed, "space_reclaimed": reclaimed}
 
 
 @app.post("/api/maintenance/reconcile", dependencies=[Depends(require_token)])
-def api_reconcile() -> dict[str, Any]:
-    reconcile_state()
-    return {"status": "ok"}
+def api_reconcile(options: ReconcileOptions | None = None) -> dict[str, Any]:
+    options = options or ReconcileOptions()
+    before = set(load_state()["integrations"])
+    if options.adopt:
+        reconcile_state()
+    state = load_state()
+    adopted = len(set(state["integrations"]) - before)
+    stale_removed = 0
+    started = 0
+    try:
+        client = get_docker()
+        existing = {c.name: c for c in client.containers.list(all=True, filters={"label": f"{LABEL_MANAGED}=managed"})}
+        if options.remove_stale:
+            for iid in list(state["integrations"]):
+                if iid not in existing:
+                    state["integrations"].pop(iid, None)
+                    stale_removed += 1
+            if stale_removed:
+                save_state(state)
+        if options.restart_stopped:
+            for iid, container in existing.items():
+                if iid in state["integrations"] and container.status != "running":
+                    try:
+                        container.start()
+                        started += 1
+                    except Exception:  # noqa: BLE001
+                        pass
+    except Exception:  # noqa: BLE001
+        pass
+    record_event("state", None, f"reconciled containers: {adopted} adopted, {stale_removed} stale removed, {started} started")
+    return {"status": "ok", "adopted": adopted, "stale_removed": stale_removed, "started": started}
 
 
 @app.get("/api/installer/logs", dependencies=[Depends(require_token)])
@@ -2763,6 +3198,7 @@ def api_post_setup(body: SetupBody) -> dict[str, Any]:
             body.webhook if body.webhook is not None else cur["webhook"],
             body.events if body.events is not None else cur["events"],
         )
+    record_event("state", None, "installer settings changed")
     return {"setup_complete": s["setup_complete"], "port_start": s["port_start"]}
 
 
@@ -2774,7 +3210,9 @@ def api_get_alerts() -> dict[str, Any]:
 
 @app.put("/api/settings/alerts", dependencies=[Depends(require_token)])
 def api_put_alerts(body: AlertSettingsBody) -> dict[str, Any]:
-    return save_alert_settings(body.webhook, body.events)
+    result = save_alert_settings(body.webhook, body.events)
+    record_event("state", None, "notification settings changed")
+    return result
 
 
 @app.post("/api/settings/alerts/test", dependencies=[Depends(require_token)])

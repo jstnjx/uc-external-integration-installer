@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">UC External Integration Installer</title>
+  <desc id="desc">Electric yellow rounded square with a centered dark square.</desc>
+  <rect width="64" height="64" rx="15" fill="#faff69"/>
+  <rect x="20" y="20" width="24" height="24" rx="6" fill="#0a0a0a"/>
+</svg>
