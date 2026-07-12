@@ -5,12 +5,12 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>UC External Integration Installer</title>
-<link rel="icon" href="/static/favicon.svg?v=5.8.1" type="image/svg+xml"/>
+<link rel="icon" href="/static/favicon.svg?v=5.9.0" type="image/svg+xml"/>
 <link href="https://fonts.googleapis.com" rel="preconnect"/>
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..24,100,0,0" rel="stylesheet"/>
-<link rel="stylesheet" href="/static/styles.css?v=5.8.1">
+<link rel="stylesheet" href="/static/styles.css?v=5.9.0">
 </head>
 <body>
 <header class="bar">
@@ -231,7 +231,7 @@
 <section class="settings-section" data-settings-tab="updates">
 <h3>Installer updates</h3><div class="hint">Choose where installer updates come from and which systemd service is restarted.</div>
 <div class="field"><label>Update repository</label><input class="mono" id="settingsRepo" placeholder="https://github.com/owner/repo"/></div>
-<div class="field"><label>Update branch / build</label><select class="mono" id="settingsBranch"></select></div>
+<div class="field"><label>Stable update source</label><select class="mono" id="settingsBranch"></select><div class="hint">Release tags are used by default. The branch is only used when no release exists or Dev builds are enabled.</div></div><label class="checkline"><input id="settingsDevBuilds" type="checkbox"/> Dev builds</label><div class="hint" style="margin:4px 0 18px">Show branches and individual branch commits in the installer update selector.</div>
 <div class="field"><label>systemd service name</label><input class="mono" id="settingsService" placeholder="uc-external-integration-installer"/></div>
 </section>
 <section class="settings-section" data-settings-tab="access">
@@ -380,16 +380,16 @@
 <aside class="operation-drawer hidden" id="operationDrawer" aria-label="Operations"><button class="operation-head" onclick="toggleOperationDrawer()" aria-expanded="false"><span>Operations</span><span id="operationSummary">No active operations</span><b class="operation-chevron" id="operationChevron"><span class="material-symbols-outlined" aria-hidden="true">expand_more</span></b></button><div class="operation-list" id="operationList"></div></aside>
 <button class="back-to-top" id="backToTop" type="button" aria-label="Back to top" title="Back to top" onclick="scrollToTop()"><span class="material-symbols-outlined" aria-hidden="true">arrow_upward</span></button>
 <div id="toasts"></div>
-<script src="/static/api.js?v=5.8.1"></script>
-<script src="/static/app.js?v=5.8.1"></script>
-<script src="/static/navigation.js?v=5.8.1"></script>
-<script src="/static/dialogs.js?v=5.8.1"></script>
-<script src="/static/logs.js?v=5.8.1"></script>
-<script src="/static/installed.js?v=5.8.1"></script>
-<script src="/static/remotes.js?v=5.8.1"></script>
-<script src="/static/settings.js?v=5.8.1"></script>
-<script src="/static/operations.js?v=5.8.1"></script>
-<script src="/static/enhancements.js?v=5.8.1"></script>
-<script src="/static/health.js?v=5.8.1"></script>
+<script src="/static/api.js?v=5.9.0"></script>
+<script src="/static/app.js?v=5.9.0"></script>
+<script src="/static/navigation.js?v=5.9.0"></script>
+<script src="/static/dialogs.js?v=5.9.0"></script>
+<script src="/static/logs.js?v=5.9.0"></script>
+<script src="/static/installed.js?v=5.9.0"></script>
+<script src="/static/remotes.js?v=5.9.0"></script>
+<script src="/static/settings.js?v=5.9.0"></script>
+<script src="/static/operations.js?v=5.9.0"></script>
+<script src="/static/enhancements.js?v=5.9.0"></script>
+<script src="/static/health.js?v=5.9.0"></script>
 </body>
 </html>

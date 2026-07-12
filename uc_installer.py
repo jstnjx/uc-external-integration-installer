@@ -311,7 +311,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 _settings_lock = threading.Lock()
 _settings_cache: dict[str, Any] | None = None
 
-_STR_SETTINGS = ("registry_url", "update_repo", "update_branch", "update_service", "token")
+_STR_SETTINGS = ("registry_url", "update_repo", "update_branch", "update_service", "token", "installed_update_ref", "installed_update_type")
 
 
 def _env_health_probe_default() -> bool:
@@ -327,6 +327,9 @@ def _settings_defaults() -> dict[str, Any]:
         "update_branch": UPDATE_BRANCH,
         "update_service": SERVICE_UNIT,
         "health_probe": _env_health_probe_default(),
+        "dev_builds": False,
+        "installed_update_ref": "",
+        "installed_update_type": "",
         "token": TOKEN,
     }
 
@@ -346,6 +349,8 @@ def load_settings() -> dict[str, Any]:
                 data["port_start"] = saved["port_start"]
             if "health_probe" in saved:
                 data["health_probe"] = bool(saved["health_probe"])
+            if "dev_builds" in saved:
+                data["dev_builds"] = bool(saved["dev_builds"])
             # token may legitimately be cleared back to empty
             if "token" in saved and isinstance(saved["token"], str):
                 data["token"] = saved["token"]
@@ -370,6 +375,8 @@ def save_settings(patch: dict[str, Any]) -> dict[str, Any]:
         cur["port_start"] = patch["port_start"]
     if "health_probe" in patch and patch["health_probe"] is not None:
         cur["health_probe"] = bool(patch["health_probe"])
+    if "dev_builds" in patch and patch["dev_builds"] is not None:
+        cur["dev_builds"] = bool(patch["dev_builds"])
     if "setup_complete" in patch and patch["setup_complete"] is not None:
         cur["setup_complete"] = bool(patch["setup_complete"])
     try:
@@ -1639,14 +1646,30 @@ def _owner_repo_from_url(url: str) -> str:
 
 def current_commit() -> dict[str, Any]:
     if not _is_git_repo():
-        return {"sha": None, "short": None, "date": None, "subject": None}
+        return {"sha": None, "short": None, "date": None, "subject": None, "ref": None, "ref_type": None}
     sha = _git("rev-parse", "HEAD")
     if sha.returncode != 0:
-        return {"sha": None, "short": None, "date": None, "subject": None}
+        return {"sha": None, "short": None, "date": None, "subject": None, "ref": None, "ref_type": None}
     full = sha.stdout.strip()
     meta = _git("log", "-1", "--format=%cI%n%s")
     date, subject = (meta.stdout.strip().split("\n", 1) + ["", ""])[:2]
-    return {"sha": full, "short": full[:7], "date": date, "subject": subject}
+    ref = None
+    ref_type = None
+    exact_tag = _git("describe", "--tags", "--exact-match", "HEAD")
+    if exact_tag.returncode == 0 and exact_tag.stdout.strip():
+        ref = exact_tag.stdout.strip()
+        ref_type = "tag"
+    else:
+        settings = load_settings()
+        saved_ref = (settings.get("installed_update_ref") or "").strip()
+        saved_type = (settings.get("installed_update_type") or "").strip()
+        if saved_ref:
+            ref, ref_type = saved_ref, saved_type or "branch"
+        else:
+            branch = _git("symbolic-ref", "--short", "-q", "HEAD")
+            if branch.returncode == 0 and branch.stdout.strip():
+                ref, ref_type = branch.stdout.strip(), "branch"
+    return {"sha": full, "short": full[:7], "date": date, "subject": subject, "ref": ref, "ref_type": ref_type}
 
 
 def latest_commit() -> dict[str, Any]:
@@ -1670,6 +1693,33 @@ def latest_commit() -> dict[str, Any]:
     }
 
 
+
+def latest_release() -> dict[str, Any] | None:
+    owner_repo = _owner_repo_from_url(update_repo())
+    resp = httpx.get(
+        f"https://api.github.com/repos/{owner_repo}/releases/latest",
+        headers={"User-Agent": "uc-external-integration-installer", "Accept": "application/vnd.github+json"},
+        timeout=15.0, follow_redirects=True,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    j = resp.json()
+    tag = j.get("tag_name")
+    if not tag:
+        return None
+    return {"tag": tag, "name": j.get("name") or tag, "published_at": j.get("published_at"), "prerelease": bool(j.get("prerelease"))}
+
+
+def _target_type(target: str) -> tuple[str, str]:
+    if target.startswith("commit:"):
+        _, branch, sha = target.split(":", 2)
+        return "commit", f"{branch}@{sha[:7]}"
+    if re.match(r"^v?\d+\.\d+\.\d+", target):
+        return "tag", target
+    return "branch", target
+
+
 def _can_restart_service() -> bool:
     # systemd sets INVOCATION_ID for units it starts; systemd-run lets us restart
     # ourselves from a separate cgroup that survives the restart.
@@ -1687,9 +1737,13 @@ def _run_git_logged(job: Job, *args: str) -> None:
 
 
 def do_update(job: Job, ref: str | None = None) -> None:
-    target = (ref or update_branch()).strip() or update_branch()
+    requested = (ref or update_branch()).strip() or update_branch()
+    fetch_target = requested
+    branch_for_commit = None
+    if requested.startswith("commit:"):
+        _, branch_for_commit, fetch_target = requested.split(":", 2)
     try:
-        job.log(f"Repository: {update_repo()}  (build: {target})")
+        job.log(f"Repository: {update_repo()}  (build: {requested})")
         job.log(f"Install directory: {APP_DIR}")
 
         if not _is_git_repo():
@@ -1698,8 +1752,13 @@ def do_update(job: Job, ref: str | None = None) -> None:
             if _git("remote", "add", "origin", update_repo()).returncode != 0:
                 _run_git_logged(job, "remote", "set-url", "origin", update_repo())
 
-        _run_git_logged(job, "fetch", "--depth", "1", "origin", target)
+        _run_git_logged(job, "fetch", "--depth", "1", "origin", fetch_target)
         _run_git_logged(job, "reset", "--hard", "FETCH_HEAD")
+
+        ref_type, stored_ref = _target_type(requested)
+        if ref_type == "commit" and branch_for_commit:
+            stored_ref = f"{branch_for_commit}@{fetch_target[:7]}"
+        save_settings({"installed_update_ref": stored_ref, "installed_update_type": ref_type})
 
         cur = current_commit()
         job.log(f"Now at {cur['short']} — {cur['subject']}")
@@ -1837,6 +1896,7 @@ def health() -> dict[str, Any]:
 @app.get("/api/update/status", dependencies=[Depends(require_token)])
 def api_update_status() -> dict[str, Any]:
     cur = current_commit()
+    settings = load_settings()
     info: dict[str, Any] = {
         "repo": update_repo(),
         "branch": update_branch(),
@@ -1844,14 +1904,21 @@ def api_update_status() -> dict[str, Any]:
         "is_git": _is_git_repo(),
         "service_restartable": _can_restart_service(),
         "current": cur,
+        "dev_builds": bool(settings.get("dev_builds", False)),
     }
     try:
+        release = latest_release()
         latest = latest_commit()
+        info["latest_release"] = release
         info["latest"] = latest
-        info["update_available"] = (cur["sha"] != latest["sha"]) if cur["sha"] else True
+        if release and not settings.get("dev_builds", False):
+            info["update_available"] = cur.get("ref_type") != "tag" or cur.get("ref") != release.get("tag")
+        else:
+            info["update_available"] = (cur["sha"] != latest["sha"]) if cur["sha"] else True
         info["error"] = None
     except Exception as exc:  # noqa: BLE001
         info["latest"] = None
+        info["latest_release"] = None
         info["update_available"] = False
         info["error"] = f"Could not reach GitHub: {exc}"
     return info
@@ -1859,28 +1926,55 @@ def api_update_status() -> dict[str, Any]:
 
 @app.get("/api/update/builds", dependencies=[Depends(require_token)])
 def api_update_builds() -> dict[str, Any]:
-    """List the branches and tags/releases of the installer repo the user can
-    switch to."""
+    """Return release tags first. Branches and individual branch commits are
+    only exposed when the Dev builds setting is enabled."""
     owner_repo = _owner_repo_from_url(update_repo())
-    headers = {"User-Agent": "uc-external-integration-installer",
-               "Accept": "application/vnd.github+json"}
-    refs: list[dict[str, str]] = []
+    headers = {"User-Agent": "uc-external-integration-installer", "Accept": "application/vnd.github+json"}
+    refs: list[dict[str, Any]] = []
     error = None
+    settings = load_settings()
+    dev_builds = bool(settings.get("dev_builds", False))
     try:
         with httpx.Client(timeout=15.0, follow_redirects=True, headers=headers) as cl:
-            b = cl.get(f"https://api.github.com/repos/{owner_repo}/branches?per_page=100")
-            if b.status_code < 400:
-                for br in b.json():
-                    refs.append({"type": "branch", "name": br.get("name", "")})
-            t = cl.get(f"https://api.github.com/repos/{owner_repo}/tags?per_page=100")
-            if t.status_code < 400:
-                for tg in t.json():
-                    refs.append({"type": "tag", "name": tg.get("name", "")})
+            releases = cl.get(f"https://api.github.com/repos/{owner_repo}/releases?per_page=100")
+            if releases.status_code < 400:
+                for rel in releases.json():
+                    tag = rel.get("tag_name")
+                    if tag:
+                        refs.append({"type": "tag", "name": tag, "value": tag, "label": rel.get("name") or tag,
+                                     "date": rel.get("published_at"), "prerelease": bool(rel.get("prerelease"))})
+            else:
+                tags = cl.get(f"https://api.github.com/repos/{owner_repo}/tags?per_page=100")
+                if tags.status_code < 400:
+                    for tg in tags.json():
+                        name = tg.get("name")
+                        if name:
+                            refs.append({"type": "tag", "name": name, "value": name, "label": name})
+            if dev_builds:
+                branches = cl.get(f"https://api.github.com/repos/{owner_repo}/branches?per_page=100")
+                if branches.status_code < 400:
+                    for br in branches.json():
+                        branch = br.get("name", "")
+                        if not branch:
+                            continue
+                        head_sha = (br.get("commit") or {}).get("sha", "")
+                        refs.append({"type": "branch", "name": branch, "value": branch, "label": f"{branch} · latest", "sha": head_sha})
+                        commits = cl.get(f"https://api.github.com/repos/{owner_repo}/commits?sha={urllib.parse.quote(branch)}&per_page=30")
+                        if commits.status_code >= 400:
+                            continue
+                        for index, commit in enumerate(commits.json()):
+                            sha = commit.get("sha", "")
+                            meta = commit.get("commit", {})
+                            message = (meta.get("message") or "").splitlines()[0]
+                            date = (meta.get("committer") or {}).get("date")
+                            if sha:
+                                refs.append({"type": "commit", "name": sha[:7], "value": f"commit:{branch}:{sha}",
+                                             "branch": branch, "sha": sha, "label": message or sha[:7],
+                                             "date": date, "branch_head": index == 0})
     except Exception as exc:  # noqa: BLE001
         error = f"Could not reach GitHub: {exc}"
-    refs = [r for r in refs if r["name"]]
-    return {"repo": update_repo(), "configured_branch": update_branch(),
-            "current": current_commit(), "refs": refs, "error": error}
+    return {"repo": update_repo(), "configured_branch": update_branch(), "current": current_commit(),
+            "dev_builds": dev_builds, "refs": refs, "error": error}
 
 
 class UpdateBody(BaseModel):
@@ -3151,6 +3245,7 @@ class SetupBody(BaseModel):
     update_branch: str | None = None
     update_service: str | None = None
     health_probe: bool | None = None
+    dev_builds: bool | None = None
     token: str | None = None
     webhook: str | None = None
     events: dict[str, bool] | None = None
@@ -3169,6 +3264,7 @@ def api_get_setup() -> dict[str, Any]:
         "update_branch": s["update_branch"],
         "update_service": s["update_service"],
         "health_probe": s["health_probe"],
+        "dev_builds": bool(s.get("dev_builds", False)),
         "token": s.get("token", ""),
         "webhook": a["webhook"],
         "events": a["events"],
@@ -3191,6 +3287,8 @@ def api_post_setup(body: SetupBody) -> dict[str, Any]:
             patch[field] = val.strip()
     if body.health_probe is not None:
         patch["health_probe"] = bool(body.health_probe)
+    if body.dev_builds is not None:
+        patch["dev_builds"] = bool(body.dev_builds)
     s = save_settings(patch)
     if body.webhook is not None or body.events is not None:
         cur = load_alert_settings()

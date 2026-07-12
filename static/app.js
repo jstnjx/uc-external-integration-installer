@@ -726,10 +726,17 @@ async function loadUpdateStatus() {
     renderUpdIndicator();
   } catch (e) { /* token gate or offline */ }
 }
+function installedRefLabel(current) {
+  if (!current) return 'unknown';
+  if (current.ref_type === 'tag' && current.ref) return current.ref;
+  if (current.ref_type === 'branch' && current.ref) return current.ref;
+  if (current.ref_type === 'commit' && current.ref) return current.ref;
+  return current.short ? 'build ' + current.short : 'unknown';
+}
 function renderUpdIndicator() {
   if (!UPD) return;
-  const cur = (UPD.current && UPD.current.short) || '—';
-  $('updInfo').textContent = UPD.update_available ? 'update available' : ('build ' + cur);
+  const label = installedRefLabel(UPD.current);
+  $('updInfo').textContent = label + (UPD.update_available ? ' · update' : '');
   $('updBtn').classList.toggle('available', !!UPD.update_available);
 }
 async function checkUpdate() {
@@ -741,49 +748,74 @@ async function checkUpdate() {
 function commitLine(c) {
   if (!c || !c.short) return '<span class="mono">unknown</span>';
   const when = c.date ? new Date(c.date).toLocaleString() : '';
-  return '<span class="mono">' + esc(c.short) + '</span> — ' + esc(c.subject || '') +
+  const ref = c.ref ? '<span class="state-pill good" style="margin-right:8px">' + esc(c.ref) + '</span>' : '';
+  return ref + '<span class="mono">' + esc(c.short) + '</span> — ' + esc(c.subject || '') +
          (when ? '<div class="hint" style="margin-top:2px">' + esc(when) + '</div>' : '');
 }
 function populateUpdate() {
-  $('updRepo').textContent = UPD ? (UPD.repo.replace('https://github.com/', '') + ' · ' + UPD.branch) : '';
+  $('updRepo').textContent = UPD ? UPD.repo.replace('https://github.com/', '') : '';
   const b = $('updBodyContent');
   if (!UPD) { b.innerHTML = '<p class="hint">Status unavailable.</p>'; return; }
   let html = '';
-  if (UPD.error) html += '<p style="color:var(--red)">' + esc(UPD.error) + '</p>';
+  if (UPD.error) html += '<p style="color:var(--rose)">' + esc(UPD.error) + '</p>';
   html += '<div class="field"><label>Installed</label>' + commitLine(UPD.current) + '</div>';
-  html += '<div class="field"><label>Latest on ' + esc(UPD.branch) + '</label>' +
-          (UPD.latest ? commitLine(UPD.latest) : '<span class="hint">could not fetch</span>') + '</div>';
+  if (UPD.latest_release) {
+    html += '<div class="field"><label>Latest release</label><span class="state-pill good">' + esc(UPD.latest_release.tag) + '</span>' +
+      (UPD.latest_release.published_at ? '<div class="hint">Released ' + esc(new Date(UPD.latest_release.published_at).toLocaleString()) + '</div>' : '') + '</div>';
+  } else if (UPD.latest) {
+    html += '<div class="field"><label>Latest on ' + esc(UPD.branch) + '</label>' + commitLine(UPD.latest) + '</div>';
+  }
   if (UPD.update_available) html += '<p style="color:var(--amber);margin:0">An update is available.</p>';
-  else if (!UPD.error) html += '<p class="hint" style="margin:0">You are on the latest version.</p>';
-  if (!UPD.service_restartable)
-    html += '<p class="hint">The service can\'t restart itself here — after updating, run ' +
-            '<span class="mono">systemctl restart ' + esc(UPD.service) + '</span> manually.</p>';
+  else if (!UPD.error) html += '<p class="hint" style="margin:0">The installed version is current.</p>';
+  if (!UPD.dev_builds) html += '<p class="hint">Only release tags are shown. Enable <strong>Dev builds</strong> in Settings to select branches or individual commits.</p>';
+  if (!UPD.service_restartable) html += '<p class="hint">The service cannot restart itself here. After updating, run <span class="mono">systemctl restart ' + esc(UPD.service) + '</span>.</p>';
   b.innerHTML = html;
-  $('updApplyBtn').textContent = UPD.update_available ? 'Update & restart' : 'Reinstall latest';
+  renderApplyLabel();
 }
 function renderApplyLabel() {
-  const ref = $('updRef') && $('updRef').value;
-  const cur = (UPD && UPD.current && UPD.current.short) || '';
+  const sel = $('updRef');
   const btn = $('updApplyBtn');
-  if (!btn) return;
-  btn.textContent = (UPD && UPD.update_available && ref === UPD.branch) ? 'Update & restart'
-    : ('Install ' + (ref || 'selected build'));
+  if (!btn || !sel) return;
+  const option = sel.options[sel.selectedIndex];
+  btn.textContent = 'Install ' + ((option && option.dataset.label) || option?.textContent || 'selected build');
+}
+function updateOptionHtml(ref, selectedValue) {
+  const value = ref.value || ref.name;
+  const selected = value === selectedValue || ref.name === selectedValue || ref.sha === selectedValue;
+  let label = ref.name;
+  if (ref.type === 'tag') label = ref.name + (ref.prerelease ? ' · prerelease' : '');
+  if (ref.type === 'branch') label = ref.name + ' · latest';
+  if (ref.type === 'commit') label = ref.name + ' · ' + (ref.label || 'commit') + (ref.branch_head ? ' · latest' : '');
+  return '<option value="' + esc(value) + '" data-label="' + esc(ref.type === 'commit' ? ref.branch + ' @ ' + ref.name : ref.name) + '"' + (selected ? ' selected' : '') + '>' + esc(label) + '</option>';
 }
 async function loadBuilds() {
   const sel = $('updRef'); if (!sel) return;
   sel.innerHTML = '<option>loading…</option>';
   try {
     const data = await api('/api/update/builds');
-    const branches = (data.refs || []).filter(r => r.type === 'branch');
     const tags = (data.refs || []).filter(r => r.type === 'tag');
+    const branches = (data.refs || []).filter(r => r.type === 'branch');
+    const commits = (data.refs || []).filter(r => r.type === 'commit');
+    const current = data.current || UPD?.current || {};
+    let selectedValue = current.ref || current.sha || '';
+    if (current.ref_type === 'commit' && current.sha) selectedValue = current.sha;
     let html = '';
-    if (branches.length) html += '<optgroup label="Branches">' +
-      branches.map(r => '<option value="' + esc(r.name) + '"' + (r.name === data.configured_branch ? ' selected' : '') + '>' + esc(r.name) + '</option>').join('') + '</optgroup>';
-    if (tags.length) html += '<optgroup label="Releases / tags">' +
-      tags.map(r => '<option value="' + esc(r.name) + '">' + esc(r.name) + '</option>').join('') + '</optgroup>';
-    sel.innerHTML = html || ('<option value="' + esc(data.configured_branch || 'main') + '">' + esc(data.configured_branch || 'main') + '</option>');
+    if (tags.length) html += '<optgroup label="Releases">' + tags.map(r => updateOptionHtml(r, selectedValue)).join('') + '</optgroup>';
+    if (data.dev_builds && branches.length) {
+      html += '<optgroup label="Development branches">' + branches.map(r => updateOptionHtml(r, selectedValue)).join('') + '</optgroup>';
+      for (const branch of branches.map(r => r.name)) {
+        html += '<optgroup label="Builds · ' + esc(branch) + '">' + commits.filter(r => r.branch === branch).map(r => updateOptionHtml(r, selectedValue)).join('') + '</optgroup>';
+      }
+    }
+    if (!html) {
+      const fallback = current.ref || data.configured_branch || 'main';
+      html = '<option value="' + esc(fallback) + '" data-label="' + esc(fallback) + '" selected>' + esc(fallback) + '</option>';
+    }
+    sel.innerHTML = html;
+    if (![...sel.options].some(o => o.selected)) sel.selectedIndex = 0;
   } catch (e) {
-    sel.innerHTML = '<option value="' + esc((UPD && UPD.branch) || 'main') + '">' + esc((UPD && UPD.branch) || 'main') + '</option>';
+    const fallback = (UPD && UPD.current && (UPD.current.ref || UPD.current.sha)) || (UPD && UPD.branch) || 'main';
+    sel.innerHTML = '<option value="' + esc(fallback) + '" data-label="' + esc(fallback) + '">' + esc(fallback) + '</option>';
   }
   renderApplyLabel();
 }
@@ -794,8 +826,17 @@ function openUpdate() {
   if (!UPD) checkUpdate();
 }
 async function applyUpdate() {
-  const ref = ($('updRef') && $('updRef').value) || '';
-  const decision = await uiConfirm({ title: 'Update installer', message: 'Install build "' + (ref || 'default') + '"?', detail: 'The installer service will restart. Active integrations will keep running.', confirmText: 'Update & restart', icon: 'upload' });
+  const sel = $('updRef');
+  const ref = (sel && sel.value) || '';
+  const label = sel?.options[sel.selectedIndex]?.dataset.label || ref || 'default';
+  const dev = ref.startsWith('commit:');
+  const decision = await uiConfirm({
+    title: dev ? 'Install development build' : 'Update installer',
+    message: 'Install "' + label + '"?',
+    detail: (dev ? 'Development builds may be unstable. ' : '') + 'The installer service will restart. Active integrations will keep running.',
+    confirmText: 'Install & restart',
+    icon: 'upload'
+  });
   if (!decision.confirmed) return;
   try {
     const { job_id } = await api('/api/update/apply', { method: 'POST', body: JSON.stringify({ ref: ref || null }) });
@@ -803,6 +844,7 @@ async function applyUpdate() {
     followUpdate(job_id);
   } catch (e) { toast(e.message, 'bad'); }
 }
+
 function followUpdate(jobId) {
   $('jobTitle').textContent = 'Updating installer';
   $('jobSub').innerHTML = '<span class="spin"></span>';
@@ -1018,13 +1060,16 @@ async function loadSettingsBranches(selected) {
   sel.innerHTML = '<option>loading…</option>';
   try {
     const data = await api('/api/update/builds');
-    const refs = data.refs || [];
-    const names = new Set(refs.map(r => r.name));
-    let html = refs.map(r => '<option value="' + esc(r.name) + '"' + (r.name === selected ? ' selected' : '') + '>' + esc(r.name) + (r.type === 'tag' ? ' · tag' : '') + '</option>').join('');
-    if (selected && !names.has(selected)) html = '<option value="' + esc(selected) + '" selected>' + esc(selected) + ' (current)</option>' + html;
+    const tags = (data.refs || []).filter(r => r.type === 'tag');
+    const branches = (data.refs || []).filter(r => r.type === 'branch').map(r => r.name);
+    let html = '';
+    if (tags.length) html += '<optgroup label="Releases">' + tags.map(r => '<option value="' + esc(r.name) + '"' + (r.name === selected ? ' selected' : '') + '>' + esc(r.name) + '</option>').join('') + '</optgroup>';
+    if (data.dev_builds && branches.length) html += '<optgroup label="Development branches">' + branches.map(name => '<option value="' + esc(name) + '"' + (name === selected ? ' selected' : '') + '>' + esc(name) + '</option>').join('') + '</optgroup>';
+    if (selected && ![...tags.map(r => r.name), ...branches].includes(selected)) html = '<option value="' + esc(selected) + '" selected>' + esc(selected) + ' (configured)</option>' + html;
     sel.innerHTML = html || '<option value="' + esc(selected || 'main') + '">' + esc(selected || 'main') + '</option>';
   } catch (e) { sel.innerHTML = '<option value="' + esc(selected || 'main') + '">' + esc(selected || 'main') + '</option>'; }
 }
+
 async function loadMainSettings() {
   try {
     const s = await api('/api/setup');
@@ -1033,6 +1078,7 @@ async function loadMainSettings() {
     $('settingsRepo').value = s.update_repo || '';
     $('settingsService').value = s.update_service || '';
     $('settingsProbe').checked = s.health_probe !== false;
+    if ($('settingsDevBuilds')) $('settingsDevBuilds').checked = s.dev_builds === true;
     $('settingsToken').value = s.token || '';
     $('settingsRuntime').innerHTML = [
       ['Bind address', (s.bind_host || '0.0.0.0') + ':' + (s.bind_port || 8900)],
@@ -1049,6 +1095,7 @@ async function saveMainSettings(options = {}) {
   body.update_branch = ($('settingsBranch').value || '').trim();
   body.update_service = $('settingsService').value.trim();
   body.health_probe = $('settingsProbe').checked;
+  body.dev_builds = $('settingsDevBuilds')?.checked === true;
   body.token = $('settingsToken').value.trim();
   try {
     await api('/api/setup', { method:'POST', body:JSON.stringify(body) });
