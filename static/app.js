@@ -1236,29 +1236,158 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { const p = document.querySelector('.workspace-panel.show'); if (p && !(p.id === 'setupBack' && $('setupCancel').style.display === 'none')) closeModal(p.id); } });
 
-async function loadSetupBranches(selected) {
+async function loadSetupBuilds(selected, firstRun = false) {
   const sel = $('setupBranch');
-  sel.innerHTML = '<option>loading…</option>';
+  if (!sel) return;
+
+  sel.disabled = true;
+  sel.innerHTML = '<option value="">Loading releases…</option>';
+
   const fallback = () => {
-    const opts = new Set([selected || 'main', 'main']);
-    sel.innerHTML = Array.from(opts).map(n => '<option value="' + esc(n) + '"' + (n === (selected || 'main') ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+    const fallbackRef = selected || 'main';
+    sel.innerHTML =
+      '<option value="' + esc(fallbackRef) + '" selected>' +
+      esc(fallbackRef) +
+      '</option>';
+    sel.value = fallbackRef;
+    sel.disabled = false;
   };
+
   try {
-    const data = await api('/api/update/builds');
-    const branches = (data.refs || []).filter(r => r.type === 'branch');
-    const tags = (data.refs || []).filter(r => r.type === 'tag');
-    if (!branches.length && !tags.length) return fallback();
+    const data = await api('/api/update/builds', {
+      timeout: 15000,
+      dedupe: false
+    });
+
+    const refs = Array.isArray(data.refs) ? data.refs : [];
+
+    /*
+     * Support both the original "tag" type and the newer "release" type.
+     * Prereleases are excluded from the first-run default.
+     */
+    const releases = refs
+      .filter(ref =>
+        (ref.type === 'release' || ref.type === 'tag') &&
+        ref.name &&
+        ref.prerelease !== true
+      )
+      .sort((a, b) => {
+        const aDate = Date.parse(a.published_at || a.created_at || 0) || 0;
+        const bDate = Date.parse(b.published_at || b.created_at || 0) || 0;
+
+        if (aDate !== bDate) return bDate - aDate;
+
+        return String(b.name).localeCompare(
+          String(a.name),
+          undefined,
+          { numeric: true, sensitivity: 'base' }
+        );
+      });
+
+    const branches = refs.filter(
+      ref => ref.type === 'branch' && ref.name
+    );
+
+    /*
+     * On first run, always prefer the newest stable release.
+     * For an already configured installation, retain its saved ref.
+     */
+    const defaultRef =
+      firstRun && releases.length
+        ? releases[0].name
+        : selected ||
+          releases[0]?.name ||
+          data.configured_ref ||
+          data.configured_branch ||
+          'main';
+
+    const knownRefs = new Set();
     let html = '';
-    const names = new Set();
-    if (branches.length) html += '<optgroup label="Branches">' + branches.map(r => { names.add(r.name); return '<option value="' + esc(r.name) + '"' + (r.name === selected ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') + '</optgroup>';
-    if (tags.length) html += '<optgroup label="Releases / tags">' + tags.map(r => { names.add(r.name); return '<option value="' + esc(r.name) + '"' + (r.name === selected ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') + '</optgroup>';
-    if (selected && !names.has(selected)) html = '<option value="' + esc(selected) + '" selected>' + esc(selected) + ' (current)</option>' + html;
+
+    if (releases.length) {
+      html +=
+        '<optgroup label="Stable releases">' +
+        releases
+          .map((release, index) => {
+            knownRefs.add(release.name);
+
+            const latestLabel =
+              index === 0 ? ' · latest stable' : '';
+
+            return (
+              '<option value="' +
+              esc(release.name) +
+              '"' +
+              (release.name === defaultRef ? ' selected' : '') +
+              '>' +
+              esc(release.name) +
+              latestLabel +
+              '</option>'
+            );
+          })
+          .join('') +
+        '</optgroup>';
+    }
+
+    /*
+     * Branches are shown here only as a fallback when no release exists.
+     * Stable first-time installations therefore cannot accidentally select
+     * main or dev.
+     */
+    if (!releases.length && branches.length) {
+      html +=
+        '<optgroup label="Development branches">' +
+        branches
+          .map(branch => {
+            knownRefs.add(branch.name);
+
+            return (
+              '<option value="' +
+              esc(branch.name) +
+              '"' +
+              (branch.name === defaultRef ? ' selected' : '') +
+              '>' +
+              esc(branch.name) +
+              '</option>'
+            );
+          })
+          .join('') +
+        '</optgroup>';
+    }
+
+    /*
+     * Retain an existing configured ref when reopening setup/settings, even
+     * when GitHub no longer returns it.
+     */
+    if (!firstRun && defaultRef && !knownRefs.has(defaultRef)) {
+      html =
+        '<option value="' +
+        esc(defaultRef) +
+        '" selected>' +
+        esc(defaultRef) +
+        ' · current</option>' +
+        html;
+    }
+
+    if (!html) {
+      fallback();
+      return;
+    }
+
     sel.innerHTML = html;
-  } catch (e) { fallback(); }
+    sel.value = defaultRef;
+    sel.disabled = false;
+  } catch (error) {
+    console.error('Could not load installer releases:', error);
+    fallback();
+  }
 }
 async function openSetup() {
   try {
     const s = await api('/api/setup');
+
+    const done = s.setup_complete === true;
+
     $('setupPort').value = s.port_start || 8000;
     $('setupRegistry').value = s.registry_url || '';
     $('setupRepo').value = s.update_repo || '';
@@ -1266,19 +1395,62 @@ async function openSetup() {
     $('setupProbe').checked = s.health_probe !== false;
     $('setupToken').value = s.token || '';
     $('setupWebhook').value = s.webhook || '';
-    $('setupEvents').innerHTML = (s.categories || []).map(cat =>
-      '<label class="checkline"><input type="checkbox" data-cat="' + cat + '"' + (s.events && s.events[cat] ? ' checked' : '') + '> ' +
-      esc(ALERT_LABELS[cat] || cat) + '</label>').join('');
+
+    $('setupEvents').innerHTML = (s.categories || [])
+      .map(
+        category =>
+          '<label class="checkline">' +
+          '<input type="checkbox" data-cat="' +
+          esc(category) +
+          '"' +
+          (s.events?.[category] ? ' checked' : '') +
+          '> ' +
+          esc(ALERT_LABELS[category] || category) +
+          '</label>'
+      )
+      .join('');
+
     $('setupRuntime').innerHTML = [
-      ['Bind address', (s.bind_host || '0.0.0.0') + ':' + (s.bind_port || 8900)],
-      ['Data directory', s.data_dir || '—'],
-    ].map(([k, v]) => '<div class="kv"><span class="k2">' + k + '</span><span class="v2 mono">' + esc(v) + '</span></div>').join('');
-    loadSetupBranches(s.update_branch || 'main');
-    const done = s.setup_complete === true;
-    $('setupTitle').textContent = done ? 'Settings' : 'Welcome — first-time setup';
-    $('setupFinish').textContent = done ? 'Save settings' : 'Finish setup';
+      [
+        'Bind address',
+        (s.bind_host || '0.0.0.0') + ':' + (s.bind_port || 8900)
+      ],
+      ['Data directory', s.data_dir || '—']
+    ]
+      .map(
+        ([key, value]) =>
+          '<div class="kv">' +
+          '<span class="k2">' +
+          esc(key) +
+          '</span>' +
+          '<span class="v2 mono">' +
+          esc(value) +
+          '</span>' +
+          '</div>'
+      )
+      .join('');
+
+    await loadSetupBuilds(
+      s.update_ref ||
+      s.installed_ref ||
+      s.update_branch ||
+      'main',
+      !done
+    );
+
+    $('setupTitle').textContent = done
+      ? 'Settings'
+      : 'Welcome — first-time setup';
+
+    $('setupFinish').textContent = done
+      ? 'Save settings'
+      : 'Finish setup';
+
     $('setupCancel').style.display = done ? '' : 'none';
-  } catch (e) {}
+  } catch (error) {
+    console.error('Could not load setup:', error);
+  }
+
   showWorkspacePanel('setupBack');
 }
 async function finishSetup() {

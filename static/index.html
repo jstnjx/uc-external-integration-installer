@@ -297,9 +297,12 @@
 <div class="hint">Git repo the installer updates itself from.</div>
 </div>
 <div class="field">
-<label>Update branch / build</label>
-<select class="mono" id="setupBranch"></select>
-<div class="hint">Which build to track. Loaded from the update repo; falls back to a text default if offline.</div>
+  <label>Installer version</label>
+  <select class="mono" id="setupBranch"></select>
+  <div class="hint">
+    The newest stable release is selected by default. The main branch is used
+    only when no release is available.
+  </div>
 </div>
 <div class="field">
 <label>systemd service name</label>
