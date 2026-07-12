@@ -128,8 +128,11 @@ can revoke over reusing sensitive credentials.
   until the driver actually appears/connects and reports the result.
 - **Live logs**: the Logs dialog can **Follow** (server-sent events stream) and
   **Download** the full log. Installs are **serialized** so concurrent builds don't clash.
-- **Alerts**: set `UC_INSTALLER_ALERT_WEBHOOK` to be notified when an instance goes
-  unreachable or exits.
+- **Notifications**: configure a webhook in **Maintenance → Notifications** (ntfy URL
+  or any JSON webhook) and tick which events to be notified about — installs, updates
+  available, registrations, health alerts, removals, backup/maintenance, and errors.
+  A **Send test** button verifies it. `UC_INSTALLER_ALERT_WEBHOOK` still works as a
+  default if you'd rather set it via environment.
 
 ## Security
 
@@ -203,6 +206,7 @@ uc-external-integration-installer/
 `DELETE /api/instances/{iid}` · `GET /api/instances/{iid}/logs[/stream]` ·
 `GET /api/events` · `GET /api/backup` · `POST /api/restore` · `POST /api/install-archive` ·
 `POST /api/maintenance/{prune|reconcile}` ·
+`GET/PUT /api/settings/alerts` · `POST /api/settings/alerts/test` ·
 `GET/POST /api/remotes` · `PUT/DELETE /api/remotes/{id}` ·
 `POST /api/remotes/{id}/test` · `POST /api/remotes/{id}/register` ·
 `GET /api/remotes/{id}/drivers` · `DELETE /api/remotes/{id}/drivers/{driver_id}`

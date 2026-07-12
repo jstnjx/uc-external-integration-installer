@@ -146,6 +146,12 @@ def record_event(kind: str, instance_id: str | None, message: str) -> None:
                 EVENTS_FILE.write_text("\n".join(lines) + "\n")
     except Exception:  # noqa: BLE001
         pass
+    category = _KIND_TO_CATEGORY.get(kind)
+    if category:
+        try:
+            notify(category, message)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def load_events(limit: int = 200) -> list[dict[str, Any]]:
@@ -163,6 +169,78 @@ def load_events(limit: int = 200) -> list[dict[str, Any]]:
         return out
     except Exception:  # noqa: BLE001
         return []
+
+
+# ---------------------------------------------------------------------------
+# Notifications (GUI-configurable webhook + per-category toggles)
+# ---------------------------------------------------------------------------
+
+NOTIFY_CATEGORIES = ["install", "update", "register", "health", "remove", "maintenance", "error"]
+# event kind -> notification category (kinds not listed never notify, e.g. lifecycle)
+_KIND_TO_CATEGORY = {
+    "install": "install", "update": "update", "register": "register",
+    "alert": "health", "remove": "remove", "state": "maintenance", "error": "error",
+}
+DEFAULT_ALERT_EVENTS = {c: c in ("update", "health", "error") for c in NOTIFY_CATEGORIES}
+ALERTS_FILE = DATA_DIR / "alerts.json"
+_alerts_lock = threading.Lock()
+_alerts_cache: dict[str, Any] | None = None
+
+
+def load_alert_settings() -> dict[str, Any]:
+    global _alerts_cache
+    if _alerts_cache is not None:
+        return _alerts_cache
+    data: dict[str, Any] = {"webhook": "", "events": dict(DEFAULT_ALERT_EVENTS)}
+    try:
+        if ALERTS_FILE.exists():
+            saved = json.loads(ALERTS_FILE.read_text())
+            if isinstance(saved.get("webhook"), str):
+                data["webhook"] = saved["webhook"].strip()
+            ev = saved.get("events") or {}
+            for c in NOTIFY_CATEGORIES:
+                if c in ev:
+                    data["events"][c] = bool(ev[c])
+    except Exception:  # noqa: BLE001
+        pass
+    if not data["webhook"] and ALERT_WEBHOOK:
+        data["webhook"] = ALERT_WEBHOOK  # environment fallback
+    _alerts_cache = data
+    return data
+
+
+def save_alert_settings(webhook: str, events: dict[str, Any]) -> dict[str, Any]:
+    global _alerts_cache
+    clean = {
+        "webhook": (webhook or "").strip(),
+        "events": {c: bool(events.get(c, False)) for c in NOTIFY_CATEGORIES},
+    }
+    with _alerts_lock:
+        ALERTS_FILE.write_text(json.dumps(clean, indent=2))
+    _alerts_cache = clean
+    return clean
+
+
+def _fire_webhook(message: str, title: str = "UC External Integration Installer") -> bool:
+    url = load_alert_settings()["webhook"]
+    if not url:
+        return False
+    try:
+        if "ntfy" in url:
+            httpx.post(url, content=message.encode("utf-8"),
+                       headers={"Title": title, "Tags": "gear"}, timeout=10.0)
+        else:
+            httpx.post(url, json={"title": title, "text": message, "message": message}, timeout=10.0)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def notify(category: str, message: str) -> None:
+    s = load_alert_settings()
+    if not s["webhook"] or not s["events"].get(category, False):
+        return
+    threading.Thread(target=_fire_webhook, args=(message,), daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -1752,7 +1830,7 @@ def _lifecycle(instance_id: str, action: str) -> dict[str, str]:
     if c is None:
         raise HTTPException(404, "Container not found")
     getattr(c, action)()
-    record_event("state", instance_id, f"{action} requested")
+    record_event("lifecycle", instance_id, f"{action} requested")
     return {"status": "ok", "action": action}
 
 
@@ -2394,44 +2472,72 @@ async def api_install_archive(file: UploadFile = File(...)) -> dict[str, str]:
     return {"job_id": job.id}
 
 
-# ---- alerts (optional webhook) ---------------------------------------------
+# ---- notification settings + monitor ---------------------------------------
 
 _alert_state: dict[str, str] = {}
+_notified_updates: set[str] = set()
 
 
-def _fire_webhook(message: str) -> None:
-    if not ALERT_WEBHOOK:
-        return
-    try:
-        if "ntfy" in ALERT_WEBHOOK:
-            httpx.post(ALERT_WEBHOOK, content=message.encode("utf-8"), timeout=10.0)
-        else:
-            httpx.post(ALERT_WEBHOOK, json={"text": message, "message": message}, timeout=10.0)
-    except Exception:  # noqa: BLE001
-        pass
+class AlertSettingsBody(BaseModel):
+    webhook: str = ""
+    events: dict[str, bool] = {}
+
+
+@app.get("/api/settings/alerts", dependencies=[Depends(require_token)])
+def api_get_alerts() -> dict[str, Any]:
+    s = load_alert_settings()
+    return {"webhook": s["webhook"], "events": s["events"], "categories": NOTIFY_CATEGORIES}
+
+
+@app.put("/api/settings/alerts", dependencies=[Depends(require_token)])
+def api_put_alerts(body: AlertSettingsBody) -> dict[str, Any]:
+    return save_alert_settings(body.webhook, body.events)
+
+
+@app.post("/api/settings/alerts/test", dependencies=[Depends(require_token)])
+def api_test_alert() -> dict[str, str]:
+    if not load_alert_settings()["webhook"]:
+        raise HTTPException(400, "Set and save a webhook URL first")
+    if not _fire_webhook("Test notification from UC External Integration Installer."):
+        raise HTTPException(502, "Failed to send — check the webhook URL")
+    return {"status": "sent"}
 
 
 def _alert_monitor() -> None:
+    tick = 0
     while True:
         try:
-            for iid, rec in load_state()["integrations"].items():
+            state = load_state()["integrations"]
+            # health transitions every 60s
+            for iid, rec in state.items():
                 c = _container_for(iid)
                 if c is None:
                     continue
-                if c.status == "running":
-                    cur = _probe_health(rec.get("port")) or "running"
-                else:
-                    cur = c.status
+                cur = (_probe_health(rec.get("port")) or "running") if c.status == "running" else c.status
                 prev = _alert_state.get(iid)
                 bad = cur in ("unreachable", "exited", "dead")
                 was_bad = prev in ("unreachable", "exited", "dead")
                 if bad and not was_bad and prev is not None:
-                    msg = f"{rec.get('label', iid)} is {cur}"
-                    record_event("alert", iid, msg)
-                    _fire_webhook(msg)
+                    record_event("alert", iid, f"{rec.get('label', iid)} is {cur}")
                 _alert_state[iid] = cur
+            # update-available checks ~hourly
+            if tick % 60 == 0:
+                for iid, rec in state.items():
+                    try:
+                        upd = compute_update(rec)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if upd.get("update_available"):
+                        if iid not in _notified_updates:
+                            _notified_updates.add(iid)
+                            record_event("update", iid,
+                                         f"update available for {rec.get('label', iid)}: "
+                                         f"{upd.get('latest_version')} (installed {upd.get('installed_version')})")
+                    else:
+                        _notified_updates.discard(iid)
         except Exception:  # noqa: BLE001
             pass
+        tick += 1
         time.sleep(60)
 
 
@@ -2461,9 +2567,9 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-# Optional health-alert monitor (only meaningful if a webhook is configured).
-if ALERT_WEBHOOK:
-    threading.Thread(target=_alert_monitor, daemon=True).start()
+# Health-transition + update-available monitor (records events; notifies when a
+# webhook is configured via the GUI or UC_INSTALLER_ALERT_WEBHOOK).
+threading.Thread(target=_alert_monitor, daemon=True).start()
 
 if __name__ == "__main__":
     import uvicorn

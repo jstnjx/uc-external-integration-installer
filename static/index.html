@@ -241,6 +241,8 @@
   .mini { background: var(--card); border: 1px solid var(--line); color: var(--body); border-radius: 5px;
     padding: 1px 8px; font-size: 11px; cursor: pointer; font-family: var(--sans); }
   .mini:hover { border-color: var(--line-2); color: var(--ink); }
+  .alert-events { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; }
+  .alert-events .checkline { font-size: 13px; }
   .empty h3 { color: var(--ink); font-weight: 700; margin: 0 0 6px; font-size: 18px; letter-spacing: -.3px; }
 
   /* ---------- token / lock bar ---------- */
@@ -526,6 +528,17 @@
       <button class="x" onclick="closeModal('maintBack')">×</button>
     </header>
     <div class="body">
+      <div class="field">
+        <label>Notifications</label>
+        <div class="hint" style="margin:0 0 8px">Send a webhook when things happen. Works with ntfy (paste your topic URL) or any JSON webhook.</div>
+        <input id="alertWebhook" class="mono" placeholder="https://ntfy.sh/your-topic" style="margin-bottom:10px" />
+        <div id="alertEvents" class="alert-events"></div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-primary btn-sm" onclick="saveAlertSettings()">Save</button>
+          <button class="btn btn-line btn-sm" onclick="testAlert()">Send test</button>
+        </div>
+      </div>
+      <div style="height:1px;background:var(--line);margin:6px 0 18px"></div>
       <div class="field">
         <label>Backup</label>
         <div class="hint" style="margin:0 0 8px">Download a tar.gz of all instance config and state.</div>
@@ -1299,7 +1312,32 @@ async function loadActivity() {
     }).join('');
   } catch (e) { $('actList').innerHTML = '<p class="hint">' + esc(e.message) + '</p>'; }
 }
-function openMaint() { $('maintBack').classList.add('show'); }
+function openMaint() { $('maintBack').classList.add('show'); loadAlertSettings(); }
+const ALERT_LABELS = { install: 'Installs', update: 'Updates available', register: 'Registrations', health: 'Health alerts (unreachable/exited)', remove: 'Removals', maintenance: 'Backup & maintenance', error: 'Errors' };
+async function loadAlertSettings() {
+  try {
+    const s = await api('/api/settings/alerts');
+    $('alertWebhook').value = s.webhook || '';
+    $('alertEvents').innerHTML = (s.categories || []).map(cat =>
+      '<label class="checkline"><input type="checkbox" data-cat="' + cat + '"' + (s.events[cat] ? ' checked' : '') + '> ' +
+      esc(ALERT_LABELS[cat] || cat) + '</label>').join('');
+  } catch (e) {}
+}
+async function saveAlertSettings() {
+  const events = {};
+  $('alertEvents').querySelectorAll('input[type=checkbox]').forEach(cb => { events[cb.dataset.cat] = cb.checked; });
+  try {
+    await api('/api/settings/alerts', { method: 'PUT', body: JSON.stringify({ webhook: $('alertWebhook').value.trim(), events }) });
+    toast('Notifications saved', 'ok');
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function testAlert() {
+  try {
+    await saveAlertSettings();
+    await api('/api/settings/alerts/test', { method: 'POST' });
+    toast('Test notification sent', 'ok');
+  } catch (e) { toast('Test failed: ' + e.message, 'bad'); }
+}
 function downloadBackup() {
   window.location.href = '/api/backup' + (token() ? '?token=' + encodeURIComponent(token()) : '');
 }
