@@ -10,7 +10,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
 <style>
   /* ============================================================
-     UC External Integration Installer
+     UC External Integration Installer — ClickHouse-inspired system
+     Near-black canvas · electric yellow used scarcely as voltage ·
+     Inter for UI, JetBrains Mono for data · flat surfaces, hairlines,
+     no drop shadows · semantic emerald/rose/amber for status only.
      ============================================================ */
   :root {
     --yellow: #faff69;
@@ -370,6 +373,7 @@
     .brand p { display: none; }
   }
 
+  /* ---------- 2026 interface overhaul ---------- */
   header.bar { background: rgba(10,10,10,.96); backdrop-filter: blur(14px); }
   .bar-inner { max-width: 1480px; padding: 12px 28px; gap: 20px; flex-wrap: nowrap; }
   .brand { min-width: 280px; }
@@ -642,7 +646,7 @@
   .rem-telemetry span { font:11px var(--mono); color:var(--muted); padding:2px 7px; border:1px solid var(--line); border-radius:var(--pill); }
   @media(max-width:900px){ .installed-controls .filter{flex:1 1 180px}.operation-drawer{right:16px;bottom:16px}.integration-row-main{align-items:flex-start} }
 
-  /* ---------- selectable installed rows + action panel ---------- */
+  /* ---------- selectable installed rows ---------- */
   .integration-row {
     position: relative;
     cursor: pointer;
@@ -655,56 +659,61 @@
   }
   .integration-row.selected::after {
     content: "Selected";
-    position: absolute; top: 10px; right: 10px;
+    position: absolute; top: 10px; right: 48px;
     padding: 2px 7px; border-radius: var(--pill);
     color: var(--yellow); background: var(--yellow-dim);
     font: 600 9px var(--sans); letter-spacing: .7px; text-transform: uppercase;
     pointer-events: none;
   }
   .integration-row:focus-visible { outline: 2px solid var(--yellow); outline-offset: 3px; }
-  .integration-row-state.good { background: var(--emerald); }
-  .integration-row-state.warn { background: var(--amber); }
-  .integration-row-state.bad { background: var(--rose); }
+  .integration-row-main { padding: 0; gap: 0; align-items: stretch; min-height: 118px; }
+  /* Restored original full-height state rail treatment. */
   .integration-row-state {
-    width: 4px; min-height: 84px; border-radius: var(--pill);
-    box-shadow: 0 0 0 1px rgba(255,255,255,.025);
+    width: 10px; align-self: stretch; min-height: 100%;
+    border-radius: var(--pill); background: var(--line-2); flex: none;
+    margin: 16px 0 16px 16px;
   }
-  .integration-row-main { padding: 0; gap: 0; align-items: stretch; }
-  .integration-row-content { padding: 17px 20px; }
-  .integration-row-actions {
-    width: 258px; flex: 0 0 258px; margin: 0;
-    padding: 14px; border-left: 1px solid var(--line);
-    background: var(--soft);
-    display: grid; grid-template-columns: repeat(2,minmax(0,1fr));
-    align-content: center; gap: 7px;
+  .integration-row-state.running { background: var(--emerald); }
+  .integration-row-state.warning { background: var(--amber); }
+  .integration-row-state.error { background: var(--rose); }
+  .integration-row-content { padding: 17px 18px; min-width: 0; }
+  .integration-row-head { gap: 7px; }
+  .integration-title-actions { display:inline-flex; align-items:center; gap:5px; }
+  .row-icon-btn {
+    appearance:none; width:28px; height:28px; display:inline-grid; place-items:center;
+    padding:0; border:1px solid var(--line); border-radius:var(--r-sm);
+    background:transparent; color:var(--muted); cursor:pointer; font:600 14px/1 var(--sans);
   }
-  .integration-row-actions .action-primary { grid-column: 1 / -1; }
-  .integration-row-actions .action-more { grid-column: 1 / -1; }
-  .integration-row-actions > .btn,
-  .integration-row-actions > .menu-wrap > .btn {
-    width: 100%; min-height: 34px; padding: 7px 10px;
+  .row-icon-btn:hover { color:var(--ink); border-color:var(--line-2); background:var(--elev); }
+  .row-icon-btn:disabled { opacity:.35; cursor:not-allowed; background:transparent; }
+  .row-icon-btn.register { color:var(--yellow); font-size:18px; }
+  .register-menu { min-width:230px; left:0; right:auto; }
+  .register-menu .menu-label { padding:7px 10px 5px; color:var(--muted); font:600 10px var(--sans); letter-spacing:.8px; text-transform:uppercase; }
+  .register-menu button { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+  .register-menu button small { color:var(--muted); font:10px var(--mono); }
+  .integration-row-chevron {
+    width:46px; flex:0 0 46px; align-self:stretch; display:grid; place-items:center;
+    border:0; border-left:1px solid var(--line); background:transparent; color:var(--muted);
+    cursor:pointer; font-size:22px; transition:background .15s,color .15s,transform .15s;
   }
-  .integration-row-actions .menu-wrap { width: 100%; }
-  .integration-row-actions .menu { min-width: 210px; }
-  .integration-row-head .auto-toggle {
-    margin-left: auto; padding: 3px 8px; background: transparent;
-  }
-  .integration-row-head .auto-toggle input { pointer-events: auto; }
-  @media (max-width: 980px) {
-    .integration-row-main { flex-wrap: wrap; }
-    .integration-row-state { width: 100%; height: 3px; min-height: 3px; border-radius: 0; }
-    .integration-row-actions {
-      width: 100%; flex-basis: 100%; border-left: 0; border-top: 1px solid var(--line);
-      grid-template-columns: repeat(4,minmax(0,1fr));
-    }
-    .integration-row-actions .action-primary,
-    .integration-row-actions .action-more { grid-column: auto; }
-  }
-  @media (max-width: 620px) {
-    .integration-row-actions { grid-template-columns: repeat(2,minmax(0,1fr)); }
-    .integration-row-actions .action-primary,
-    .integration-row-actions .action-more { grid-column: 1 / -1; }
-    .integration-row-head .auto-toggle { margin-left: 0; }
+  .integration-row-chevron:hover { background:var(--soft); color:var(--yellow); }
+  .integration-row-chevron span { display:block; transition:transform .15s var(--ease); }
+  .integration-row-chevron.open span { transform:rotate(90deg); }
+  .integration-row .details { margin:0; padding:20px; border-top:1px solid var(--line); border-radius:0 0 var(--r-md) var(--r-md); background:var(--soft); }
+  .details-management { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
+  .details-management-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+  .details-management-head h4 { margin:0; color:var(--ink); font-size:14px; }
+  .details-actions-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }
+  .details-actions-grid .btn { width:100%; }
+  .details-auto { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 14px; margin-bottom:12px; border:1px solid var(--line); border-radius:var(--r-md); background:var(--card); }
+  .details-auto strong { display:block; color:var(--ink); font-size:13px; }
+  .details-auto span { display:block; color:var(--muted); font-size:11px; margin-top:2px; }
+  @media (max-width: 720px) {
+    .integration-row-state { width:4px; margin-left:10px; }
+    .integration-row-content { padding:15px 12px; }
+    .integration-row-chevron { width:40px; flex-basis:40px; }
+    .integration-row-head .auto-toggle { margin-left:0; }
+    .integration-row.selected::after { display:none; }
   }
 
 </style>
@@ -1329,9 +1338,18 @@ function detailsHtml(it) {
   const kv = arr => arr.map(([k, v]) => '<div class="kv"><span class="k2">' + k + '</span><span class="v2">' + v + '</span></div>').join('');
   return '<div class="tiles">' + tiles + '</div>' +
          '<div class="det-grid">' + kv(meta) + '</div>' +
-         '<div class="det-actions">' +
-           '<button class="btn btn-line btn-sm" onclick="backupInstance(\'' + it.id + '\')">Backup config</button>' +
-           '<button class="btn btn-line btn-sm" onclick="restoreInstance(\'' + it.id + '\')">Restore config…</button>' +
+         '<div class="details-management">' +
+           '<div class="details-management-head"><h4>Management</h4><span class="hint" style="margin:0">Actions for this integration instance</span></div>' +
+           '<div class="details-auto"><div><strong>Automatic updates</strong><span>Install newer released versions automatically.</span></div><label class="auto-toggle"><input type="checkbox" ' + (it.auto_update ? 'checked' : '') + ' onchange="setAutoUpdate(\'' + it.id + '\',this.checked)"/> Auto-update</label></div>' +
+           '<div class="details-actions-grid">' +
+             '<button class="btn btn-line btn-sm" onclick="openLogs(\'' + it.id + '\')">View logs</button>' +
+             '<button class="btn btn-line btn-sm" onclick="openVersion(\'' + it.id + '\')">Change version</button>' +
+             '<button class="btn btn-line btn-sm" onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
+             '<button class="btn btn-line btn-sm" onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
+             '<button class="btn btn-line btn-sm" onclick="backupInstance(\'' + it.id + '\')">Backup config</button>' +
+             '<button class="btn btn-line btn-sm" onclick="restoreInstance(\'' + it.id + '\')">Restore config…</button>' +
+             '<button class="btn btn-danger btn-sm" onclick="removeIntegration(\'' + it.id + '\')">Remove integration</button>' +
+           '</div>' +
          '</div>';
 }
 function copyText(t) { if (navigator.clipboard) navigator.clipboard.writeText(t); toast('Copied', 'ok'); }
@@ -2003,9 +2021,10 @@ async function deleteRemote(rid) {
   try { await api('/api/remotes/' + rid, { method: 'DELETE' }); toast('Remote deleted', 'ok'); await loadRemotes(); }
   catch (e) { toast(e.message, 'bad'); }
 }
-async function registerIntegration(id) {
-  if (!REMOTES.active) { toast('Add and select a remote first', 'bad'); openRemotes(); return; }
-  const r = activeRemote();
+async function registerIntegration(id, remoteId) {
+  const targetRemote = remoteId || REMOTES.active;
+  if (!targetRemote) { toast('Add and select a remote first', 'bad'); openRemotes(); return; }
+  const r = (REMOTES.remotes || []).find(x => x.id === targetRemote) || activeRemote();
   const it = INSTALLED.find(x => x.id === id);
   if (it && it.status !== 'running') {
     const decision = await uiConfirm({ title: 'Register stopped integration', message: 'This integration is not running.', detail: 'The remote may fail to connect until the integration is started.', confirmText: 'Register anyway', icon: '!' });
@@ -2013,7 +2032,7 @@ async function registerIntegration(id) {
   }
   toast('Registering on ' + (r ? r.name : 'remote') + '…');
   try {
-    const res = await api('/api/remotes/' + REMOTES.active + '/register', {
+    const res = await api('/api/remotes/' + targetRemote + '/register', {
       method: 'POST', body: JSON.stringify({ integration_id: id }),
     });
     if (res.confirmed) {
@@ -2351,15 +2370,37 @@ function handleInstalledRowKey(event,id){
   event.preventDefault();
   toggleInstalledSelection(id,!SELECTED_INSTALLED.has(id));
 }
+function stateRailClass(status){
+  if(status==='running') return 'running';
+  if(['missing','exited','dead'].includes(status)) return 'error';
+  return 'warning';
+}
+function remoteRegisterMenuHtml(it){
+  const remotes=(REMOTES.remotes||[]);
+  if(!remotes.length) return '<div class="menu-label">No remotes configured</div><button onclick="openRemotes()">Add a remote</button>';
+  return '<div class="menu-label">Register on remote</div>' + remotes.map(r =>
+    '<button onclick="registerIntegration(\''+it.id+'\',\''+r.id+'\')"><span>'+esc(r.name||r.host||r.id)+'</span><small>'+esc((r.host||'')+(r.port?':'+r.port:''))+'</small></button>'
+  ).join('');
+}
+function toggleRegisterMenu(event,id){
+  event.stopPropagation();
+  const menu=$('reg-menu-'+id), open=menu?.classList.contains('show');
+  closeMenus();
+  if(menu&&!open) menu.classList.add('show');
+}
 function renderInstalled(){
   const box=$('installedRows'); box.innerHTML=''; box.className='rows installed-list'; updateOverview(); const visible=filteredInstalled();
   if(!visible.length){ box.innerHTML='<div class="empty"><h3>'+(INSTALLED.length?'No matching instances':'No integrations installed')+'</h3><p>'+(INSTALLED.length?'Adjust the active filters.':'Browse the registry to install your first integration.')+'</p>'+(INSTALLED.length?'':'<button class="btn btn-primary" onclick="switchTab(\'browse\')">Browse integrations</button>')+'</div>'; updateBulkBar(); return; }
   visible.forEach(it=>{ const running=it.status==='running', rc=it.restart_count||0, upd=UPDATES[it.id]||{}, regs=REGS[it.id]||[], st=STATS[it.id]||{}, health=st.health||it.health||(running?'starting':'unknown'), expanded=EXPANDED.has(it.id), selected=SELECTED_INSTALLED.has(it.id), looping=(it.status==='restarting'||it.status==='exited')&&rc>=3;
     const row=document.createElement('article'); row.className='row integration-row'+(selected?' selected':''); row.tabIndex=0; row.setAttribute('aria-selected',selected?'true':'false'); row.setAttribute('role','option'); row.onclick=e=>handleInstalledRowClick(e,it.id); row.onkeydown=e=>handleInstalledRowKey(e,it.id);
-    row.innerHTML='<div class="integration-row-main"><div class="integration-row-state '+statusTone(it.status)+'" title="Container: '+esc(it.status)+'"></div><div class="integration-row-content"><div class="integration-row-head"><span class="integration-row-title">'+esc(it.label||it.name)+'</span>'+(upd.update_available?'<span class="upd-badge" onclick="openVersion(\''+it.id+'\')">update ▸ '+esc(fmtVer(upd.latest_version||''))+'</span>':'')+'<label class="auto-toggle" title="Automatically install newer released versions"><input type="checkbox" '+(it.auto_update?'checked':'')+' onchange="setAutoUpdate(\''+it.id+'\',this.checked)"/> Auto-update</label></div><div class="integration-row-sub">'+esc(it.id)+(it.driver_id?' · '+esc(it.driver_id):'')+'</div>'+
+    row.innerHTML='<div class="integration-row-main"><div class="integration-row-state '+stateRailClass(it.status)+'" title="Container: '+esc(it.status)+'"></div><div class="integration-row-content"><div class="integration-row-head"><span class="integration-row-title">'+esc(it.label||it.name)+'</span><span class="integration-title-actions">'+
+      '<button class="row-icon-btn" title="Stop integration" aria-label="Stop '+esc(it.label||it.name)+'" '+(!running?'disabled':'')+' onclick="lifecycle(\''+it.id+'\',\'stop\')">■</button>'+
+      '<button class="row-icon-btn" title="Restart integration" aria-label="Restart '+esc(it.label||it.name)+'" onclick="lifecycle(\''+it.id+'\',\'restart\')">↻</button>'+
+      '<span class="menu-wrap"><button class="row-icon-btn register" title="Register on a remote" aria-label="Register '+esc(it.label||it.name)+' on a remote" onclick="toggleRegisterMenu(event,\''+it.id+'\')">+</button><div class="menu register-menu" id="reg-menu-'+it.id+'">'+remoteRegisterMenuHtml(it)+'</div></span></span>'+
+      (upd.update_available?'<span class="upd-badge" onclick="openVersion(\''+it.id+'\')">update ▸ '+esc(fmtVer(upd.latest_version||''))+'</span>':'')+'</div><div class="integration-row-sub">'+esc(it.id)+(it.driver_id?' · '+esc(it.driver_id):'')+'</div>'+
       '<div class="state-group"><span class="state-pill '+statusTone(it.status)+'">container · '+esc(it.status)+'</span><span class="state-pill '+statusTone(health)+'">health · '+esc(health)+'</span><span class="state-pill '+(regs.length?'good':'warn')+'">remote · '+(regs.length?esc(regs.map(r=>r.remote_name).join(', ')):'unregistered')+'</span><span class="state-pill '+(upd.update_available?'warn':'good')+'">version · '+(upd.update_available?'update available':'current')+'</span></div>'+
-      '<div class="integration-row-meta"><span>port <strong>'+esc(String(it.port))+'</strong></span><span>version <strong>'+esc(fmtVer(it.version||'latest'))+'</strong></span><span>cpu <strong>'+(st.cpu_pct!=null?esc(String(st.cpu_pct))+'%':'—')+'</strong></span><span>memory <strong>'+(st.mem_used!=null?fmtBytes(st.mem_used):'—')+'</strong></span><span>uptime <strong>'+fmtUptime(st.started_at)+'</strong></span></div>'+(looping?'<div class="integration-row-alert">Crash loop detected. Open logs to inspect the failure.</div>':'')+'</div>'+
-      '<div class="integration-row-actions">'+(running?'<button class="btn btn-line action-primary" onclick="lifecycle(\''+it.id+'\',\'stop\')">Stop integration</button>':'<button class="btn btn-primary action-primary" onclick="lifecycle(\''+it.id+'\',\'start\')">Start integration</button>')+'<button class="btn btn-line btn-sm" onclick="openLogs(\''+it.id+'\')">Logs</button><button class="btn btn-line btn-sm" onclick="registerIntegration(\''+it.id+'\')">Register</button><button class="btn btn-line btn-sm'+(expanded?' det-open':'')+'" onclick="toggleDetails(\''+it.id+'\')">'+(expanded?'Hide details':'Details')+'</button><div class="menu-wrap action-more"><button class="btn btn-line btn-sm" onclick="toggleMenu(event,\''+it.id+'\')">More actions ▾</button><div class="menu" id="menu-'+it.id+'"><button onclick="lifecycle(\''+it.id+'\',\'restart\')">Restart</button><button onclick="openVersion(\''+it.id+'\')">Change version</button><button onclick="openConfig(\''+it.id+'\')">Configure</button><button onclick="rebuild(\''+it.id+'\')">Rebuild</button><div class="menu-sep"></div><button onclick="backupInstance(\''+it.id+'\')">Backup config</button><button onclick="restoreInstance(\''+it.id+'\')">Restore config…</button><div class="menu-sep"></div><button class="danger" onclick="removeIntegration(\''+it.id+'\')">Remove</button></div></div></div></div>'+(expanded?'<div class="details">'+detailsHtml(it)+'</div>':''); box.appendChild(row);
+      '<div class="integration-row-meta"><span>port <strong>'+esc(String(it.port))+'</strong></span><span>version <strong>'+esc(fmtVer(it.version||'latest'))+'</strong></span><span>cpu <strong>'+(st.cpu_pct!=null?esc(String(st.cpu_pct))+'%':'—')+'</strong></span><span>memory <strong>'+(st.mem_used!=null?fmtBytes(st.mem_used):'—')+'</strong></span><span>uptime <strong>'+fmtUptime(st.started_at)+'</strong></span></div>'+(looping?'<div class="integration-row-alert">Crash loop detected. Open details to inspect logs and management options.</div>':'')+'</div>'+
+      '<button class="integration-row-chevron'+(expanded?' open':'')+'" title="'+(expanded?'Hide':'Show')+' details" aria-label="'+(expanded?'Hide':'Show')+' details for '+esc(it.label||it.name)+'" onclick="toggleDetails(\''+it.id+'\')"><span>›</span></button></div>'+(expanded?'<div class="details">'+detailsHtml(it)+'</div>':''); box.appendChild(row);
   }); updateBulkBar();
 }
 async function setAutoUpdate(id,enabled){ try{await api('/api/instances/'+id+'/auto-update',{method:'POST',body:JSON.stringify({enabled})}); const it=INSTALLED.find(x=>x.id===id); if(it)it.auto_update=enabled; toast('Auto-update '+(enabled?'enabled':'disabled'),'ok');}catch(e){toast(e.message,'bad');loadInstalled();} }
