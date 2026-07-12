@@ -595,7 +595,7 @@ async function openLogs(id) {
   clearLogFilters();
   showLogLoading();
   showWorkspacePanel('logBack');
-  refreshLogs();
+  await refreshLogs();
 }
 async function openInstallerLogs() {
   if (logSource) { logSource.close(); logSource = null; }
@@ -606,7 +606,7 @@ async function openInstallerLogs() {
   clearLogFilters();
   showLogLoading();
   showWorkspacePanel('logBack');
-  refreshLogs();
+  await refreshLogs();
 }
 function classifyLogLine(line) {
   const value = String(line || '');
@@ -689,6 +689,15 @@ function updateLogSummary(visible, total) {
 function clearLogFilters() {
   if ($('logSearch')) $('logSearch').value = '';
   if ($('logLevelFilter')) $('logLevelFilter').value = '';
+  if ($('logTimeFilter')) $('logTimeFilter').value = '0';
+  if ($('logRegex')) $('logRegex').checked = false;
+  if (window.AppStore?.state?.log) {
+    AppStore.state.log.query = '';
+    AppStore.state.log.level = '';
+    AppStore.state.log.time = '0';
+    AppStore.state.log.regex = false;
+    AppStore.persist?.();
+  }
   applyLogFilters();
 }
 async function refreshLogs() {

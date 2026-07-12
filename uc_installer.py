@@ -2103,7 +2103,7 @@ def api_logs(instance_id: str, tail: int = 300):
     c = _container_for(instance_id)
     if c is None:
         raise HTTPException(404, "Container not found")
-    logs = c.logs(tail=tail, timestamps=False).decode("utf-8", "replace")
+    logs = c.logs(tail=tail, timestamps=True).decode("utf-8", "replace")
     return {"logs": logs}
 
 
@@ -2117,7 +2117,7 @@ def api_logs_stream(instance_id: str, tail: int = 200):
 
     def gen():
         try:
-            for line in c.logs(stream=True, follow=True, tail=tail):
+            for line in c.logs(stream=True, follow=True, tail=tail, timestamps=True):
                 text = line.decode("utf-8", "replace").rstrip("\n")
                 yield f"data: {text}\n\n"
         except Exception:  # noqa: BLE001

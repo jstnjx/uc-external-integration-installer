@@ -1,4 +1,4 @@
-window.msIcon = window.msIcon || function(name, cls='') { return '<svg class="ms-icon '+cls+'" aria-hidden="true"><use href="/static/material-symbols.svg#'+name+'"></use></svg>'; };
+window.msIcon = window.msIcon || function(name, cls='') { return '<span class="material-symbols-outlined '+cls+'" aria-hidden="true">'+name+'</span>'; };
 /* Shared state store and persistence helpers. */
 window.AppStore = (() => {
   const listeners = new Set();
