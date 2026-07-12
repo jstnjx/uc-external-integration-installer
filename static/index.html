@@ -322,6 +322,34 @@
   .dt-ext { color: var(--emerald); background: rgba(34,197,94,.14); }
   .dt-cust { color: var(--blue); background: rgba(59,130,246,.14); }
 
+  /* ---------- app dialogs ---------- */
+  .dialog-back {
+    position: fixed; inset: 0; z-index: 120; display: none;
+    align-items: center; justify-content: center; padding: 22px;
+    background: rgba(0,0,0,.78); backdrop-filter: blur(4px);
+  }
+  .dialog-back.show { display: flex; animation: fade .14s var(--ease); }
+  .dialog {
+    width: min(520px, 100%); background: var(--soft); border: 1px solid var(--line);
+    border-radius: var(--r-lg); box-shadow: 0 24px 70px rgba(0,0,0,.7);
+    animation: pop .18s var(--ease); overflow: hidden;
+  }
+  .dialog-head { padding: 18px 20px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: flex-start; }
+  .dialog-icon { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: var(--r-md); background: var(--elev); color: var(--yellow); font-weight: 700; }
+  .dialog.danger .dialog-icon { color: var(--rose); background: rgba(239,68,68,.1); }
+  .dialog-title { margin: 0; color: var(--ink); font-size: 17px; line-height: 1.35; letter-spacing: -.3px; }
+  .dialog-body { padding: 20px; color: var(--body); }
+  .dialog-message { margin: 0; white-space: pre-wrap; }
+  .dialog-detail { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
+  .dialog-field { margin-top: 16px; }
+  .dialog-field label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
+  .dialog-field input[type="text"] { width: 100%; height: 42px; padding: 10px 12px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); font: 13px var(--mono); }
+  .dialog-field input[type="text"]:focus { outline: none; border-color: var(--yellow); }
+  .dialog-check { margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--card); }
+  .dialog-foot { padding: 15px 20px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 9px; }
+  .dialog-confirm.danger { background: var(--rose); color: white; }
+  .dialog-confirm.danger:hover { background: #dc2626; }
+
   /* ---------- toasts ---------- */
   #toasts { position: fixed; bottom: 24px; right: 24px; z-index: 80; display: flex;
     flex-direction: column; gap: 10px; }
@@ -581,6 +609,42 @@
   .runtime-list .kv:last-child { border-bottom:0; }
   @media (max-width:820px) { .settings-grid { grid-template-columns:1fr; } .settings-section.wide { grid-column:auto; } }
 
+
+  /* ---------- management enhancements ---------- */
+  .installed-controls { align-items:stretch; }
+  .installed-controls .filter { min-width:150px; }
+  .bulk-bar { display:none; align-items:center; gap:8px; flex-wrap:wrap; margin:-4px 0 14px; padding:10px 12px; background:var(--soft); border:1px solid var(--line); border-radius:var(--r-md); }
+  .bulk-bar.show { display:flex; }
+  .bulk-bar #bulkCount { color:var(--muted); font:12px var(--mono); }
+  .integration-select { align-self:flex-start; margin-top:4px; accent-color:var(--yellow); width:16px; height:16px; }
+  .state-group { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .state-pill { display:inline-flex; align-items:center; gap:6px; padding:3px 8px; border:1px solid var(--line); border-radius:var(--pill); color:var(--muted); font:11px var(--mono); }
+  .state-pill.good { color:var(--emerald); background:rgba(34,197,94,.08); border-color:rgba(34,197,94,.2); }
+  .state-pill.warn { color:var(--amber); background:rgba(245,158,11,.08); border-color:rgba(245,158,11,.2); }
+  .state-pill.bad { color:var(--rose); background:rgba(239,68,68,.08); border-color:rgba(239,68,68,.2); }
+  .auto-toggle { display:inline-flex; align-items:center; gap:7px; color:var(--muted); font-size:12px; cursor:pointer; padding:5px 8px; border:1px solid var(--line); border-radius:var(--r-md); background:var(--soft); }
+  .auto-toggle input { accent-color:var(--yellow); }
+  .operation-drawer { position:fixed; right:24px; bottom:24px; width:min(420px,calc(100vw - 32px)); z-index:70; background:var(--soft); border:1px solid var(--line); border-radius:var(--r-lg); overflow:hidden; box-shadow:0 20px 50px rgba(0,0,0,.45); }
+  .operation-head { width:100%; display:flex; align-items:center; gap:10px; border:0; background:var(--card); color:var(--ink); padding:11px 13px; cursor:pointer; text-align:left; }
+  .operation-head span:first-child { font-weight:700; }
+  .operation-head span:nth-child(2) { margin-left:auto; color:var(--muted); font:11px var(--mono); }
+  .operation-list { display:none; max-height:300px; overflow:auto; }
+  .operation-drawer.open .operation-list { display:block; }
+  .operation-item { padding:11px 13px; border-top:1px solid var(--line); }
+  .operation-row { display:flex; justify-content:space-between; gap:12px; color:var(--body-strong); font-size:12.5px; }
+  .operation-meta { color:var(--muted); font:11px var(--mono); margin-top:5px; }
+  .operation-progress { height:3px; background:var(--line); margin-top:8px; overflow:hidden; border-radius:3px; }
+  .operation-progress span { display:block; height:100%; background:var(--yellow); transition:width .2s; }
+  .compact-check { white-space:nowrap; padding:0 4px; font-size:12px; }
+  .log-view.no-wrap .log-message { white-space:pre; }
+  .log-view.hide-time .log-time { display:none; }
+  .log-line.match .log-message { background:rgba(250,255,105,.09); }
+  .log-jump { position:sticky; bottom:10px; float:right; }
+  .settings-section.dirty { border-color:rgba(250,255,105,.45); }
+  .field-error { color:var(--rose); font-size:12px; margin-top:5px; }
+  .rem-telemetry { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .rem-telemetry span { font:11px var(--mono); color:var(--muted); padding:2px 7px; border:1px solid var(--line); border-radius:var(--pill); }
+  @media(max-width:900px){ .installed-controls .filter{flex:1 1 180px}.operation-drawer{right:16px;bottom:16px}.integration-row-main{align-items:flex-start} }
 </style>
 </head>
 <body>
@@ -662,13 +726,15 @@
 <div><h3>Installed instances</h3><p>Monitor runtime state, manage versions, and register drivers.</p></div>
 <button class="btn btn-line" onclick="loadInstalled();loadUpdates();loadRegistrations();loadStats()">↻ Refresh status</button>
 </div>
-<div class="control-bar">
-<div class="search"><input id="installedSearch" oninput="renderInstalled()" placeholder="Search installed integrations…"/></div>
-<select class="filter" id="statusFilter" onchange="renderInstalled()">
-<option value="">All states</option><option value="running">Running</option><option value="stopped">Stopped</option>
-<option value="attention">Needs attention</option><option value="updates">Updates available</option>
-</select>
+<div class="control-bar installed-controls">
+<div class="search"><input id="installedSearch" oninput="renderInstalled();saveInstalledView()" placeholder="Search name, ID, driver, port, or repository…"/></div>
+<select class="filter" id="statusFilter" onchange="renderInstalled();saveInstalledView()"><option value="">All container states</option><option value="running">Running</option><option value="stopped">Stopped</option><option value="attention">Needs attention</option></select>
+<select class="filter" id="healthFilter" onchange="renderInstalled();saveInstalledView()"><option value="">All health states</option><option value="healthy">Healthy</option><option value="unhealthy">Unhealthy</option><option value="unknown">Unknown</option></select>
+<select class="filter" id="registrationFilter" onchange="renderInstalled();saveInstalledView()"><option value="">Any registration</option><option value="registered">Registered</option><option value="unregistered">Unregistered</option></select>
+<select class="filter" id="updateFilter" onchange="renderInstalled();saveInstalledView()"><option value="">Any update state</option><option value="available">Update available</option><option value="current">Current</option><option value="auto">Auto-update enabled</option></select>
+<select class="filter" id="installedSort" onchange="renderInstalled();saveInstalledView()"><option value="name">Sort: Name</option><option value="status">Sort: Status</option><option value="cpu">Sort: CPU</option><option value="memory">Sort: Memory</option><option value="uptime">Sort: Uptime</option><option value="port">Sort: Port</option><option value="updated">Sort: Last updated</option></select>
 </div>
+<div class="bulk-bar" id="bulkBar"><label class="checkline"><input type="checkbox" id="selectAllInstalled" onchange="toggleSelectAllInstalled(this.checked)"/> Select visible</label><span id="bulkCount">0 selected</span><div class="spacer"></div><button class="btn btn-line btn-sm" onclick="bulkLifecycle('start')">Start</button><button class="btn btn-line btn-sm" onclick="bulkLifecycle('stop')">Stop</button><button class="btn btn-line btn-sm" onclick="bulkLifecycle('restart')">Restart</button><button class="btn btn-line btn-sm" onclick="bulkRegister()">Register</button><button class="btn btn-line btn-sm" onclick="bulkAutoUpdate(true)">Enable auto-update</button><button class="btn btn-line btn-sm" onclick="bulkAutoUpdate(false)">Disable auto-update</button><button class="btn btn-danger btn-sm" onclick="bulkRemove()">Remove</button></div>
 <div class="rows" id="installedRows"></div>
 </section>
 </div><div class="workspace-panel" data-workspace-panel="true" id="cfgBack">
@@ -768,6 +834,14 @@
 <div class="log-toolbar">
 <div class="search"><input id="logSearch" placeholder="Filter log messages…" oninput="applyLogFilters()"/></div>
 <select class="filter" id="logLevelFilter" onchange="applyLogFilters()"><option value="">All levels</option><option value="error">Errors</option><option value="warn">Warnings</option><option value="info">Info</option><option value="success">Success</option><option value="debug">Debug</option><option value="other">Other</option></select>
+<select class="filter" id="logTimeFilter" onchange="applyLogFilters()"><option value="">Any time</option><option value="5">Last 5 minutes</option><option value="15">Last 15 minutes</option><option value="60">Last hour</option><option value="360">Last 6 hours</option><option value="1440">Last 24 hours</option></select>
+<label class="checkline compact-check"><input id="logRegex" type="checkbox" onchange="applyLogFilters()"/> Regex</label>
+<label class="checkline compact-check"><input id="logWrap" type="checkbox" checked onchange="toggleLogWrap()"/> Wrap</label>
+<label class="checkline compact-check"><input id="logTimestamps" type="checkbox" checked onchange="toggleLogTimestamps()"/> Timestamps</label>
+<button class="btn btn-line btn-sm" id="logPauseBtn" onclick="toggleLogPause()">Pause</button>
+<button class="btn btn-line btn-sm" onclick="jumpToLatestLogs()">Jump to latest</button>
+<button class="btn btn-line btn-sm" onclick="copyVisibleLogs()">Copy visible</button>
+<button class="btn btn-line btn-sm" onclick="clearVisibleLogs()">Clear view</button>
 <button class="btn btn-line btn-sm" onclick="clearLogFilters()">Clear filters</button>
 <span class="log-summary" id="logSummary"></span>
 </div>
@@ -899,6 +973,36 @@
 <!-- FIRST-RUN SETUP -->
 
 <input accept=".tar.gz,.tgz,application/gzip" id="instRestoreFile" onchange="doInstanceRestore(this.files[0])" style="display:none" type="file"/>
+<!-- REUSABLE APPLICATION DIALOG -->
+<div class="dialog-back" id="dialogBack" role="presentation" onclick="dialogBackdropClick(event)">
+  <div class="dialog" id="appDialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle" aria-describedby="dialogMessage">
+    <div class="dialog-head">
+      <div class="dialog-icon" id="dialogIcon">?</div>
+      <div>
+        <h2 class="dialog-title" id="dialogTitle">Confirm</h2>
+        <div class="dialog-detail" id="dialogHeaderDetail" style="display:none"></div>
+      </div>
+    </div>
+    <div class="dialog-body">
+      <p class="dialog-message" id="dialogMessage"></p>
+      <p class="dialog-detail" id="dialogDetail" style="display:none"></p>
+      <div class="dialog-field" id="dialogPromptField" style="display:none">
+        <label id="dialogPromptLabel" for="dialogPromptInput">Value</label>
+        <input type="text" id="dialogPromptInput" autocomplete="off" />
+      </div>
+      <label class="checkline dialog-check" id="dialogCheckWrap" style="display:none">
+        <input type="checkbox" id="dialogCheck" />
+        <span id="dialogCheckLabel"></span>
+      </label>
+    </div>
+    <div class="dialog-foot">
+      <button class="btn btn-line" id="dialogCancel">Cancel</button>
+      <button class="btn btn-primary dialog-confirm" id="dialogConfirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<aside class="operation-drawer" id="operationDrawer" aria-label="Operations"><button class="operation-head" onclick="toggleOperationDrawer()"><span>Operations</span><span id="operationSummary">No active operations</span><b id="operationChevron">⌃</b></button><div class="operation-list" id="operationList"></div></aside>
 <div id="toasts"></div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -934,6 +1038,75 @@ function toast(msg, kind) {
   t.textContent = msg;
   $('toasts').appendChild(t);
   setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 300); }, 3200);
+}
+
+let dialogResolver = null;
+let dialogPreviousFocus = null;
+
+function closeAppDialog(result) {
+  const back = $('dialogBack');
+  if (!back.classList.contains('show')) return;
+  back.classList.remove('show');
+  document.removeEventListener('keydown', dialogKeydown);
+  const resolve = dialogResolver;
+  dialogResolver = null;
+  if (dialogPreviousFocus && typeof dialogPreviousFocus.focus === 'function') dialogPreviousFocus.focus();
+  dialogPreviousFocus = null;
+  if (resolve) resolve(result);
+}
+function dialogBackdropClick(e) { if (e.target === $('dialogBack')) closeAppDialog({ confirmed: false, value: null, checked: false }); }
+function dialogKeydown(e) {
+  if (e.key === 'Escape') { e.preventDefault(); closeAppDialog({ confirmed: false, value: null, checked: false }); }
+  if (e.key === 'Enter' && e.target !== $('dialogCancel')) { e.preventDefault(); $('dialogConfirm').click(); }
+}
+function openAppDialog(options) {
+  const o = Object.assign({
+    type: 'confirm', title: 'Confirm', message: '', detail: '', confirmText: 'Confirm', cancelText: 'Cancel',
+    danger: false, icon: '?', promptLabel: 'Value', promptValue: '', checkboxLabel: '', checkboxChecked: false,
+  }, options || {});
+  if (dialogResolver) closeAppDialog({ confirmed: false, value: null, checked: false });
+  dialogPreviousFocus = document.activeElement;
+  $('dialogTitle').textContent = o.title;
+  $('dialogMessage').textContent = o.message;
+  $('dialogDetail').textContent = o.detail || '';
+  $('dialogDetail').style.display = o.detail ? '' : 'none';
+  $('dialogIcon').textContent = o.icon || (o.danger ? '!' : '?');
+  $('appDialog').classList.toggle('danger', !!o.danger);
+  $('dialogConfirm').classList.toggle('danger', !!o.danger);
+  $('dialogConfirm').textContent = o.confirmText;
+  $('dialogCancel').textContent = o.cancelText;
+  $('dialogCancel').style.display = o.type === 'alert' ? 'none' : '';
+  const prompt = o.type === 'prompt';
+  $('dialogPromptField').style.display = prompt ? '' : 'none';
+  $('dialogPromptLabel').textContent = o.promptLabel;
+  $('dialogPromptInput').value = o.promptValue == null ? '' : String(o.promptValue);
+  const hasCheck = !!o.checkboxLabel;
+  $('dialogCheckWrap').style.display = hasCheck ? '' : 'none';
+  $('dialogCheckLabel').textContent = o.checkboxLabel || '';
+  $('dialogCheck').checked = !!o.checkboxChecked;
+  $('dialogBack').classList.add('show');
+  document.addEventListener('keydown', dialogKeydown);
+  return new Promise(resolve => {
+    dialogResolver = resolve;
+    $('dialogCancel').onclick = () => closeAppDialog({ confirmed: false, value: null, checked: $('dialogCheck').checked });
+    $('dialogConfirm').onclick = () => closeAppDialog({
+      confirmed: true,
+      value: prompt ? $('dialogPromptInput').value : null,
+      checked: hasCheck ? $('dialogCheck').checked : false,
+    });
+    requestAnimationFrame(() => (prompt ? $('dialogPromptInput') : $('dialogConfirm')).focus());
+  });
+}
+async function uiAlert(options) {
+  await openAppDialog(Object.assign({ type: 'alert', title: 'Information', confirmText: 'OK', icon: 'i' }, typeof options === 'string' ? { message: options } : options));
+}
+async function uiConfirm(options) {
+  const result = await openAppDialog(Object.assign({ type: 'confirm' }, typeof options === 'string' ? { message: options } : options));
+  return result;
+}
+async function uiPrompt(options) {
+  const result = await openAppDialog(Object.assign({ type: 'prompt', confirmText: 'Save' }, typeof options === 'string' ? { message: options } : options));
+  return result.confirmed ? result.value : null;
 }
 
 function saveToken() {
@@ -1217,7 +1390,8 @@ async function lifecycle(id, action) {
 }
 async function rebuild(id) {
   const it = INSTALLED.find(x => x.id === id); if (!it) return;
-  if (!confirm('Rebuild ' + (it.label || id) + '? Re-pulls or rebuilds from source and recreates the container.')) return;
+  const decision = await uiConfirm({ title: 'Rebuild integration', message: 'Rebuild ' + (it.label || id) + '?', detail: 'The source or image will be refreshed and the container recreated.', confirmText: 'Rebuild', icon: '↻' });
+  if (!decision.confirmed) return;
   try {
     const { job_id } = await api('/api/instances/' + id + '/rebuild', { method: 'POST', body: '{}' });
     followJob(job_id, 'Rebuilding ' + id);
@@ -1234,7 +1408,8 @@ async function toggleAutoUpdate(id) {
 }
 async function addInstance(integrationId) {
   const it = REGISTRY.integrations.find(x => x.id === integrationId);
-  if (!confirm('Start an additional instance of ' + (it ? it.name : integrationId) + '? It gets its own port, config and driver id.')) return;
+  const decision = await uiConfirm({ title: 'Add integration instance', message: 'Start another instance of ' + (it ? it.name : integrationId) + '?', detail: 'The instance receives its own port, configuration, and driver ID.', confirmText: 'Add instance', icon: '+' });
+  if (!decision.confirmed) return;
   try {
     const { job_id, instance_id } = await api('/api/integrations/' + integrationId + '/add-instance', { method: 'POST', body: '{}' });
     followJob(job_id, 'Adding instance ' + instance_id);
@@ -1242,8 +1417,15 @@ async function addInstance(integrationId) {
 }
 async function removeIntegration(id) {
   const it = INSTALLED.find(x => x.id === id);
-  if (!confirm('Remove ' + (it ? it.label : id) + '? The container is deleted. Config is kept unless you confirm purge next.')) return;
-  const purge = confirm('Also delete its saved config' + (it && it.instance > 1 ? '' : ' and cloned source') + '? OK = purge, Cancel = keep.');
+  const decision = await uiConfirm({
+    title: 'Remove integration',
+    message: 'Remove ' + (it ? it.label : id) + '?',
+    detail: 'The container will be deleted. Saved configuration is kept unless you select the option below.',
+    confirmText: 'Remove', danger: true, icon: '!',
+    checkboxLabel: 'Also delete saved configuration' + (it && it.instance > 1 ? '' : ' and cloned source'),
+  });
+  if (!decision.confirmed) return;
+  const purge = decision.checked;
   try { await api('/api/instances/' + id + '?purge=' + purge, { method: 'DELETE' });
     toast('Removed ' + id, 'ok'); loadInstalled(); loadRegistrations();
   } catch (e) { toast(e.message, 'bad'); }
@@ -1568,7 +1750,8 @@ function openUpdate() {
 }
 async function applyUpdate() {
   const ref = ($('updRef') && $('updRef').value) || '';
-  if (!confirm('Install build "' + (ref || 'default') + '" from GitHub and restart the service? Active integrations keep running.')) return;
+  const decision = await uiConfirm({ title: 'Update installer', message: 'Install build "' + (ref || 'default') + '"?', detail: 'The installer service will restart. Active integrations will keep running.', confirmText: 'Update & restart', icon: '↑' });
+  if (!decision.confirmed) return;
   try {
     const { job_id } = await api('/api/update/apply', { method: 'POST', body: JSON.stringify({ ref: ref || null }) });
     closeModal('updBack');
@@ -1703,7 +1886,8 @@ async function viewDrivers(rid) {
   } catch (e) { box.innerHTML = '<span class="hint" style="color:var(--red)">' + esc(e.message) + '</span>'; }
 }
 async function unregisterDriver(rid, driverId) {
-  if (!confirm('Unregister ' + driverId + ' from this remote?')) return;
+  const decision = await uiConfirm({ title: 'Unregister driver', message: 'Unregister ' + driverId + ' from this remote?', confirmText: 'Unregister', danger: true, icon: '!' });
+  if (!decision.confirmed) return;
   try { await api('/api/remotes/' + rid + '/drivers/' + encodeURIComponent(driverId), { method: 'DELETE' });
     toast('Unregistered ' + driverId, 'ok'); viewDrivers(rid); viewDrivers(rid);
     setTimeout(loadRegistrations, 500);
@@ -1752,7 +1936,8 @@ async function saveRemote() {
   } catch (e) { toast(e.message, 'bad'); }
 }
 async function deleteRemote(rid) {
-  if (!confirm('Delete this remote? Registered integrations stay on the remote.')) return;
+  const decision = await uiConfirm({ title: 'Delete remote', message: 'Delete this remote from the installer?', detail: 'Integrations already registered on the remote will remain there.', confirmText: 'Delete remote', danger: true, icon: '!' });
+  if (!decision.confirmed) return;
   try { await api('/api/remotes/' + rid, { method: 'DELETE' }); toast('Remote deleted', 'ok'); await loadRemotes(); }
   catch (e) { toast(e.message, 'bad'); }
 }
@@ -1760,7 +1945,10 @@ async function registerIntegration(id) {
   if (!REMOTES.active) { toast('Add and select a remote first', 'bad'); openRemotes(); return; }
   const r = activeRemote();
   const it = INSTALLED.find(x => x.id === id);
-  if (it && it.status !== 'running' && !confirm('This integration is not running. The remote may fail to connect. Register anyway?')) return;
+  if (it && it.status !== 'running') {
+    const decision = await uiConfirm({ title: 'Register stopped integration', message: 'This integration is not running.', detail: 'The remote may fail to connect until the integration is started.', confirmText: 'Register anyway', icon: '!' });
+    if (!decision.confirmed) return;
+  }
   toast('Registering on ' + (r ? r.name : 'remote') + '…');
   try {
     const res = await api('/api/remotes/' + REMOTES.active + '/register', {
@@ -2042,6 +2230,105 @@ async function init() {
     if (!document.querySelector('.workspace-panel.show') && !document.querySelector('.menu.show')) { loadInstalled(); loadRegistrations(); loadStats(); }
   }, 6000);
 }
+
+// ---- management enhancement layer ----
+const SELECTED_INSTALLED = new Set();
+const OPERATIONS = new Map();
+const REMOTE_TELEMETRY = {};
+let LOG_PAUSED = false;
+let LOG_AT_LATEST = true;
+let LOG_PENDING = [];
+let FORM_BASELINES = new Map();
+
+function saveInstalledView() {
+  const ids=['installedSearch','statusFilter','healthFilter','registrationFilter','updateFilter','installedSort'];
+  const data={}; ids.forEach(id=>{if($(id)) data[id]=$(id).value;});
+  localStorage.setItem('uc_installed_view',JSON.stringify(data));
+}
+function restoreInstalledView() {
+  try { const d=JSON.parse(localStorage.getItem('uc_installed_view')||'{}'); Object.entries(d).forEach(([k,v])=>{if($(k)) $(k).value=v;}); } catch(e){}
+}
+function selectedInstalledIds(){ return Array.from(SELECTED_INSTALLED).filter(id=>INSTALLED.some(x=>x.id===id)); }
+function updateBulkBar(){ const n=selectedInstalledIds().length; $('bulkBar')?.classList.toggle('show',n>0); if($('bulkCount')) $('bulkCount').textContent=n+' selected'; }
+function toggleInstalledSelection(id, checked){ checked?SELECTED_INSTALLED.add(id):SELECTED_INSTALLED.delete(id); updateBulkBar(); }
+function toggleSelectAllInstalled(checked){ filteredInstalled().forEach(it=>checked?SELECTED_INSTALLED.add(it.id):SELECTED_INSTALLED.delete(it.id)); renderInstalled(); }
+async function bulkLifecycle(action){ const ids=selectedInstalledIds(); if(!ids.length)return; const d=await uiConfirm({title:action[0].toUpperCase()+action.slice(1)+' integrations',message:action+' '+ids.length+' selected integrations?',confirmText:action[0].toUpperCase()+action.slice(1)}); if(!d.confirmed)return; await Promise.allSettled(ids.map(id=>api('/api/instances/'+id+'/'+action,{method:'POST'}))); toast(action+' requested for '+ids.length+' integrations','ok'); setTimeout(loadInstalled,500); }
+async function bulkAutoUpdate(enabled){ const ids=selectedInstalledIds(); if(!ids.length)return; await Promise.allSettled(ids.map(id=>api('/api/instances/'+id+'/auto-update',{method:'POST',body:JSON.stringify({enabled})}))); toast('Auto-update '+(enabled?'enabled':'disabled')+' for '+ids.length+' integrations','ok'); loadInstalled(); }
+async function bulkRegister(){ const ids=selectedInstalledIds(); for(const id of ids){ try{await registerIntegration(id);}catch(e){} } }
+async function bulkRemove(){ const ids=selectedInstalledIds(); if(!ids.length)return; const d=await uiConfirm({title:'Remove integrations',message:'Remove '+ids.length+' selected integrations?',detail:ids.join('\n'),confirmText:'Remove all',danger:true,checkboxLabel:'Also delete saved configuration and cloned source'}); if(!d.confirmed)return; await Promise.allSettled(ids.map(id=>api('/api/instances/'+id+'?purge='+d.checked,{method:'DELETE'}))); SELECTED_INSTALLED.clear(); toast('Removed selected integrations','ok'); loadInstalled(); loadRegistrations(); }
+
+function filteredInstalled(){
+  const q=($('installedSearch')?.value||'').trim().toLowerCase(), sf=$('statusFilter')?.value||'', hf=$('healthFilter')?.value||'', rf=$('registrationFilter')?.value||'', uf=$('updateFilter')?.value||'', sort=$('installedSort')?.value||'name';
+  let out=INSTALLED.filter(it=>{
+    const st=STATS[it.id]||{}, regs=REGS[it.id]||[], upd=UPDATES[it.id]||{};
+    const hay=[it.label,it.name,it.id,it.source,it.driver_id,it.repository,it.port].join(' ').toLowerCase();
+    if(q&&!hay.includes(q))return false;
+    if(sf==='running'&&it.status!=='running')return false;
+    if(sf==='stopped'&&['running','restarting'].includes(it.status))return false;
+    if(sf==='attention'&&!(['missing','exited','dead','restarting'].includes(it.status)||(it.restart_count||0)>=3||['unhealthy','unreachable'].includes(st.health||it.health)))return false;
+    const health=(st.health||it.health||'unknown').toLowerCase();
+    if(hf==='healthy'&&!['healthy','responding'].includes(health))return false;
+    if(hf==='unhealthy'&&!['unhealthy','unreachable'].includes(health))return false;
+    if(hf==='unknown'&&health!=='unknown'&&health!=='starting'&&health!=='inactive')return false;
+    if(rf==='registered'&&!regs.length)return false; if(rf==='unregistered'&&regs.length)return false;
+    if(uf==='available'&&!upd.update_available)return false; if(uf==='current'&&upd.update_available)return false; if(uf==='auto'&&!it.auto_update)return false;
+    return true;
+  });
+  const val=it=>{const st=STATS[it.id]||{}; if(sort==='status')return String(it.status); if(sort==='cpu')return -(st.cpu_pct||0); if(sort==='memory')return -(st.mem_used||0); if(sort==='uptime')return new Date(st.started_at||0).getTime(); if(sort==='port')return Number(it.port||0); if(sort==='updated')return -new Date(it.updated_at||it.installed_at||0).getTime(); return String(it.label||it.name||'').toLowerCase();};
+  return out.sort((a,b)=>{const av=val(a),bv=val(b); return typeof av==='number'?av-bv:String(av).localeCompare(String(bv));});
+}
+function statusTone(v){ return ['running','healthy','responding','registered','current'].includes(v)?'good':['missing','exited','dead','unhealthy','unreachable'].includes(v)?'bad':'warn'; }
+function renderInstalled(){
+  const box=$('installedRows'); box.innerHTML=''; box.className='rows installed-list'; updateOverview(); const visible=filteredInstalled();
+  if(!visible.length){ box.innerHTML='<div class="empty"><h3>'+(INSTALLED.length?'No matching instances':'No integrations installed')+'</h3><p>'+(INSTALLED.length?'Adjust the active filters.':'Browse the registry to install your first integration.')+'</p>'+(INSTALLED.length?'':'<button class="btn btn-primary" onclick="switchTab(\'browse\')">Browse integrations</button>')+'</div>'; updateBulkBar(); return; }
+  visible.forEach(it=>{ const running=it.status==='running', rc=it.restart_count||0, upd=UPDATES[it.id]||{}, regs=REGS[it.id]||[], st=STATS[it.id]||{}, health=st.health||it.health||(running?'starting':'unknown'), expanded=EXPANDED.has(it.id), selected=SELECTED_INSTALLED.has(it.id), looping=(it.status==='restarting'||it.status==='exited')&&rc>=3;
+    const row=document.createElement('article'); row.className='row integration-row';
+    row.innerHTML='<div class="integration-row-main"><input class="integration-select" type="checkbox" '+(selected?'checked':'')+' onchange="toggleInstalledSelection(\''+it.id+'\',this.checked)" aria-label="Select '+esc(it.label||it.name)+'">'+
+      '<div class="integration-row-state '+statusTone(it.status)+'"></div><div class="integration-row-content"><div class="integration-row-head"><span class="integration-row-title">'+esc(it.label||it.name)+'</span>'+(upd.update_available?'<span class="upd-badge" onclick="openVersion(\''+it.id+'\')">update ▸ '+esc(fmtVer(upd.latest_version||''))+'</span>':'')+'</div><div class="integration-row-sub">'+esc(it.id)+(it.driver_id?' · '+esc(it.driver_id):'')+'</div>'+
+      '<div class="state-group"><span class="state-pill '+statusTone(it.status)+'">container · '+esc(it.status)+'</span><span class="state-pill '+statusTone(health)+'">health · '+esc(health)+'</span><span class="state-pill '+(regs.length?'good':'warn')+'">remote · '+(regs.length?esc(regs.map(r=>r.remote_name).join(', ')):'unregistered')+'</span><span class="state-pill '+(upd.update_available?'warn':'good')+'">version · '+(upd.update_available?'update available':'current')+'</span></div>'+
+      '<div class="integration-row-meta"><span>port <strong>'+esc(String(it.port))+'</strong></span><span>version <strong>'+esc(fmtVer(it.version||'latest'))+'</strong></span><span>cpu <strong>'+(st.cpu_pct!=null?esc(String(st.cpu_pct))+'%':'—')+'</strong></span><span>memory <strong>'+(st.mem_used!=null?fmtBytes(st.mem_used):'—')+'</strong></span><span>uptime <strong>'+fmtUptime(st.started_at)+'</strong></span></div>'+(looping?'<div class="integration-row-alert">Crash loop detected. Open logs to inspect the failure.</div>':'')+'</div>'+
+      '<div class="integration-row-actions"><label class="auto-toggle" title="Automatically install newer released versions"><input type="checkbox" '+(it.auto_update?'checked':'')+' onchange="setAutoUpdate(\''+it.id+'\',this.checked)"/> Auto-update</label>'+(running?'<button class="btn btn-line btn-sm" onclick="lifecycle(\''+it.id+'\',\'stop\')">Stop</button>':'<button class="btn btn-primary btn-sm" onclick="lifecycle(\''+it.id+'\',\'start\')">Start</button>')+'<button class="btn btn-line btn-sm" onclick="openLogs(\''+it.id+'\')">Logs</button><button class="btn btn-line btn-sm" onclick="registerIntegration(\''+it.id+'\')">Register</button><button class="btn btn-line btn-sm'+(expanded?' det-open':'')+'" onclick="toggleDetails(\''+it.id+'\')">'+(expanded?'Hide details':'Details')+'</button><div class="menu-wrap"><button class="btn btn-line btn-sm" onclick="toggleMenu(event,\''+it.id+'\')">More ▾</button><div class="menu" id="menu-'+it.id+'"><button onclick="lifecycle(\''+it.id+'\',\'restart\')">Restart</button><button onclick="openVersion(\''+it.id+'\')">Change version</button><button onclick="openConfig(\''+it.id+'\')">Configure</button><button onclick="rebuild(\''+it.id+'\')">Rebuild</button><div class="menu-sep"></div><button onclick="backupInstance(\''+it.id+'\')">Backup config</button><button onclick="restoreInstance(\''+it.id+'\')">Restore config…</button><div class="menu-sep"></div><button class="danger" onclick="removeIntegration(\''+it.id+'\')">Remove</button></div></div></div></div>'+(expanded?'<div class="details">'+detailsHtml(it)+'</div>':''); box.appendChild(row);
+  }); updateBulkBar();
+}
+async function setAutoUpdate(id,enabled){ try{await api('/api/instances/'+id+'/auto-update',{method:'POST',body:JSON.stringify({enabled})}); const it=INSTALLED.find(x=>x.id===id); if(it)it.auto_update=enabled; toast('Auto-update '+(enabled?'enabled':'disabled'),'ok');}catch(e){toast(e.message,'bad');loadInstalled();} }
+
+function routeForPanel(id){ return {remBack:'remotes',logBack:logInstaller?'installer-logs':'logs/'+(logTarget||''),actBack:'activity',maintBack:'settings',updBack:'update',cfgBack:'configure/'+(cfgTarget||''),jobBack:'operations',setupBack:'setup'}[id]||'installed'; }
+function setHash(route,replace=false){ const h='#/'+route; if(location.hash!==h) history[replace?'replaceState':'pushState']({},'',h); }
+const _switchTab=switchTab; switchTab=function(t){ _switchTab(t); setHash(t); };
+const _showWorkspacePanel=showWorkspacePanel; showWorkspacePanel=function(id){ _showWorkspacePanel(id); setHash(routeForPanel(id)); };
+const _hideWorkspacePanel=hideWorkspacePanel; hideWorkspacePanel=function(id){ _hideWorkspacePanel(id); setHash(TAB||'browse'); };
+function applyRoute(){ const r=(location.hash||'#/browse').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='settings'){openMaint();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
+window.addEventListener('popstate',applyRoute);
+
+function addOperation(id,title){ OPERATIONS.set(id,{id,title,status:'running',lines:[],progress:5}); renderOperations(); }
+function updateOperation(id,patch){ const op=OPERATIONS.get(id)||{id,title:id,status:'running',lines:[],progress:5}; Object.assign(op,patch); OPERATIONS.set(id,op); renderOperations(); }
+function renderOperations(){ const ops=Array.from(OPERATIONS.values()).slice(-8).reverse(); const active=ops.filter(o=>o.status==='running').length; if($('operationSummary'))$('operationSummary').textContent=active?active+' active':(ops.length?ops[0].status:'No active operations'); if($('operationList'))$('operationList').innerHTML=ops.length?ops.map(o=>'<div class="operation-item"><div class="operation-row"><span>'+esc(o.title)+'</span><span>'+esc(o.status)+'</span></div><div class="operation-meta">'+esc((o.lines||[]).slice(-1)[0]||'Queued')+'</div><div class="operation-progress"><span style="width:'+(o.status==='success'?100:o.status==='failed'?100:Math.min(95,o.progress||10))+'%"></span></div></div>').join(''):'<div class="empty" style="padding:24px">No operations yet</div>'; }
+function toggleOperationDrawer(){ $('operationDrawer')?.classList.toggle('open'); }
+function followJob(jobId,title){ addOperation(jobId,title); const poll=async()=>{let job;try{job=await api('/api/jobs/'+jobId);}catch(e){updateOperation(jobId,{status:'failed',lines:[e.message]});return;} updateOperation(jobId,{status:job.status,lines:job.lines||[],progress:Math.min(90,10+(job.lines||[]).length*3)}); if(job.status==='running'){setTimeout(poll,900);return;} if(job.status==='success'){toast(title.split(' ')[0]+' complete','ok');loadInstalled();loadUpdates();loadRegistrations();}else toast('Job failed — open Operations for details','bad');}; poll(); $('operationDrawer')?.classList.add('open'); }
+
+function toggleLogPause(){ LOG_PAUSED=!LOG_PAUSED; if($('logPauseBtn'))$('logPauseBtn').textContent=LOG_PAUSED?'Resume':'Pause'; if(!LOG_PAUSED&&LOG_PENDING.length){LOG_PENDING.splice(0).forEach(appendLogLine);applyLogFilters();} }
+function jumpToLatestLogs(){ LOG_AT_LATEST=true; scrollLogsToLatest(true); }
+function toggleLogWrap(){ $('logConsole')?.classList.toggle('no-wrap',!$('logWrap')?.checked); }
+function toggleLogTimestamps(){ $('logConsole')?.classList.toggle('hide-time',!$('logTimestamps')?.checked); }
+function clearVisibleLogs(){ $('logConsole')?.querySelectorAll('.log-line:not(.filtered-out)').forEach(x=>x.remove()); applyLogFilters(); }
+async function copyVisibleLogs(){ const text=Array.from($('logConsole')?.querySelectorAll('.log-line:not(.filtered-out)')||[]).map(x=>x.textContent).join('\n'); await navigator.clipboard?.writeText(text); toast('Visible logs copied','ok'); }
+const _appendLogLine=appendLogLine; appendLogLine=function(line){ if(LOG_PAUSED){LOG_PENDING.push(line);return;} _appendLogLine(line); if(LOG_AT_LATEST)scrollLogsToLatest(); };
+const _applyLogFilters=applyLogFilters; applyLogFilters=function(){ const c=$('logConsole'); if(!c)return; const query=($('logSearch')?.value||'').trim(), level=$('logLevelFilter')?.value||'', mins=Number($('logTimeFilter')?.value||0), regex=$('logRegex')?.checked; let rx=null; if(regex&&query){try{rx=new RegExp(query,'i');}catch(e){}} let visible=0,total=0; const cutoff=Date.now()-mins*60000; c.querySelectorAll('.log-line').forEach(row=>{total++; const text=row.dataset.search||'', lv=!level||row.dataset.level===level; let qm=!query||(rx?rx.test(text):text.includes(query.toLowerCase())); let tm=true;if(mins){const raw=row.querySelector('.log-time')?.textContent||'';const ts=Date.parse(raw);tm=!Number.isNaN(ts)&&ts>=cutoff;} const show=lv&&qm&&tm;row.classList.toggle('filtered-out',!show);row.classList.toggle('match',show&&!!query);if(show)visible++;});updateLogSummary(visible,total); };
+const _downloadLogs=downloadLogs; downloadLogs=async function(){ const rows=Array.from($('logConsole')?.querySelectorAll('.log-line:not(.filtered-out)')||[]); if(rows.length){const blob=new Blob([rows.map(x=>x.textContent).join('\n')],{type:'text/plain'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(logInstaller?'uc-installer':logTarget)+'-filtered.log';a.click();URL.revokeObjectURL(a.href);return;} return _downloadLogs(); };
+$('logConsole')?.addEventListener('scroll',()=>{const c=$('logConsole');LOG_AT_LATEST=(c.scrollHeight-c.scrollTop-c.clientHeight)<32;});
+
+const _testRemote=testRemote; testRemote=async function(rid){ const started=Date.now(); try{const r=await api('/api/remotes/'+rid+'/test',{method:'POST'});REMOTE_TELEMETRY[rid]={ok:true,last:new Date(),latency:Date.now()-started,drivers:r.driver_count};toast('Connected in '+(Date.now()-started)+' ms','ok');renderRemoteList();}catch(e){REMOTE_TELEMETRY[rid]={ok:false,last:new Date(),error:e.message};toast('Test failed: '+e.message,'bad');renderRemoteList();} };
+const _renderRemoteList=renderRemoteList; renderRemoteList=function(){ _renderRemoteList(); (REMOTES.remotes||[]).forEach(r=>{const row=$('rem-'+r.id),t=REMOTE_TELEMETRY[r.id];if(!row)return;const div=document.createElement('div');div.className='rem-telemetry';div.innerHTML=t?(t.ok?'<span style="color:var(--emerald)">reachable</span><span>'+t.latency+' ms</span><span>'+(t.drivers??'—')+' drivers</span><span>tested '+t.last.toLocaleTimeString()+'</span>':'<span style="color:var(--rose)">unreachable</span><span>'+esc(t.error||'failed')+'</span>'):'<span>connection not tested</span>';row.querySelector('.rem-actions')?.before(div);}); };
+
+function captureFormBaseline(rootId){ const root=$(rootId); if(!root)return; const data={}; root.querySelectorAll('input,select,textarea').forEach((el,i)=>data[el.id||i]=el.type==='checkbox'?el.checked:el.value); FORM_BASELINES.set(rootId,JSON.stringify(data)); }
+function formDirty(rootId){ const root=$(rootId);if(!root||!FORM_BASELINES.has(rootId))return false;const data={};root.querySelectorAll('input,select,textarea').forEach((el,i)=>data[el.id||i]=el.type==='checkbox'?el.checked:el.value);return JSON.stringify(data)!==FORM_BASELINES.get(rootId);}
+const _openMaint=openMaint; openMaint=function(){_openMaint();setTimeout(()=>captureFormBaseline('maintBack'),500);};
+const _saveMainSettings=saveMainSettings; saveMainSettings=async function(){ const port=Number($('settingsPort')?.value); if(!Number.isInteger(port)||port<1||port>65535){toast('First integration port must be between 1 and 65535','bad');$('settingsPort')?.focus();return;} await _saveMainSettings();captureFormBaseline('maintBack');};
+window.addEventListener('beforeunload',e=>{if(formDirty('maintBack')||formDirty('cfgBack')||formDirty('remBack')){e.preventDefault();e.returnValue='';}});
+
+restoreInstalledView();
+setTimeout(()=>{if(location.hash)applyRoute();else setHash('browse',true);},0);
+
 init();
 </script>
 </body>
