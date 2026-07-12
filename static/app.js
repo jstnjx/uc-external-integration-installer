@@ -64,7 +64,7 @@ function openAppDialog(options) {
   $('dialogMessage').textContent = o.message;
   $('dialogDetail').textContent = o.detail || '';
   $('dialogDetail').style.display = o.detail ? '' : 'none';
-  $('dialogIcon').textContent = o.icon || (o.danger ? '!' : '?');
+  const iconName = o.danger ? 'warning' : ({i:'info',upload:'upload',restart_alt:'restart_alt',warning:'warning',info:'info'}[o.icon] || 'info'); $('dialogIcon').innerHTML = msIcon(iconName);
   $('appDialog').classList.toggle('danger', !!o.danger);
   $('dialogConfirm').classList.toggle('danger', !!o.danger);
   $('dialogConfirm').textContent = o.confirmText;
@@ -367,12 +367,12 @@ function renderInstalled() {
       ? '<button class="btn btn-line btn-sm" onclick="lifecycle(\'' + it.id + '\',\'stop\')">Stop</button>'
       : '<button class="btn btn-primary btn-sm" onclick="lifecycle(\'' + it.id + '\',\'start\')">Start</button>';
     const registration = regs.length ? esc(regs.map(r => r.remote_name).join(', ')) : 'Not registered';
-    const updateBadge = upd.update_available ? '<span class="upd-badge" onclick="openVersion(\'' + it.id + '\')">update ▸ ' + esc(fmtVer(upd.latest_version || '')) + '</span>' : '';
+    const updateBadge = upd.update_available ? '<span class="upd-badge" onclick="openVersion(\'' + it.id + '\')">update ' + esc(fmtVer(upd.latest_version || '')) + '</span>' : '';
     row.innerHTML =
       '<div class="integration-row-main">' +
         '<div class="integration-row-state ' + stateClass + '"></div>' +
         '<div class="integration-row-content">' +
-          '<div class="integration-row-head"><span class="integration-row-title">' + esc(it.label || it.name) + '</span>' + updateBadge + (it.auto_update ? '<span class="auto-badge">⟳ auto-update</span>' : '') + '</div>' +
+          '<div class="integration-row-head"><span class="integration-row-title">' + esc(it.label || it.name) + '</span>' + updateBadge + (it.auto_update ? '<span class="auto-badge">auto-update</span>' : '') + '</div>' +
           '<div class="integration-row-sub">' + esc(it.id) + (it.driver_id ? ' · ' + esc(it.driver_id) : '') + '</div>' +
           '<div class="integration-row-meta">' +
             '<span>' + statusLed(it.status) + ' <strong>' + esc(it.status) + '</strong>' + (rc ? ' · ' + rc + ' restarts' : '') + '</span>' +
@@ -389,7 +389,7 @@ function renderInstalled() {
           '<button class="btn btn-line btn-sm" onclick="openLogs(\'' + it.id + '\')">Logs</button>' +
           '<button class="btn btn-line btn-sm" onclick="registerIntegration(\'' + it.id + '\')">Register</button>' +
           '<button class="btn btn-line btn-sm' + (expanded ? ' det-open' : '') + '" onclick="toggleDetails(\'' + it.id + '\')">' + (expanded ? 'Hide details' : 'Details') + '</button>' +
-          '<div class="menu-wrap"><button class="btn btn-line btn-sm" onclick="toggleMenu(event,\'' + it.id + '\')">More ▾</button><div class="menu" id="menu-' + it.id + '">' +
+          '<div class="menu-wrap"><button class="btn btn-line btn-sm" onclick="toggleMenu(event,\'' + it.id + '\')">More</button><div class="menu" id="menu-' + it.id + '">' +
             '<button onclick="lifecycle(\'' + it.id + '\',\'restart\')">Restart</button><button onclick="openVersion(\'' + it.id + '\')">Change version</button><button onclick="openConfig(\'' + it.id + '\')">Configure</button><button onclick="rebuild(\'' + it.id + '\')">Rebuild</button><button onclick="toggleAutoUpdate(\'' + it.id + '\')">Auto-update: ' + (it.auto_update ? 'on' : 'off') + '</button><div class="menu-sep"></div><button onclick="backupInstance(\'' + it.id + '\')">Backup config</button><button onclick="restoreInstance(\'' + it.id + '\')">Restore config…</button><div class="menu-sep"></div><button class="danger" onclick="removeIntegration(\'' + it.id + '\')">Remove</button></div></div>' +
         '</div>' +
       '</div>' + (expanded ? '<div class="details">' + detailsHtml(it) + '</div>' : '');
@@ -408,7 +408,7 @@ async function lifecycle(id, action) {
 }
 async function rebuild(id) {
   const it = INSTALLED.find(x => x.id === id); if (!it) return;
-  const decision = await uiConfirm({ title: 'Rebuild integration', message: 'Rebuild ' + (it.label || id) + '?', detail: 'The source or image will be refreshed and the container recreated.', confirmText: 'Rebuild', icon: '↻' });
+  const decision = await uiConfirm({ title: 'Rebuild integration', message: 'Rebuild ' + (it.label || id) + '?', detail: 'The source or image will be refreshed and the container recreated.', confirmText: 'Rebuild', icon: 'restart_alt' });
   if (!decision.confirmed) return;
   try {
     const { job_id } = await api('/api/instances/' + id + '/rebuild', { method: 'POST', body: '{}' });
@@ -461,7 +461,7 @@ function addEnvRow(k, v) {
   row.className = 'env-row';
   row.innerHTML = '<input class="k" placeholder="KEY" value="' + esc(k || '') + '">' +
                   '<input class="v" placeholder="value" value="' + esc(v || '') + '">' +
-                  '<button class="btn btn-line btn-sm" onclick="this.parentElement.remove()">✕</button>';
+                  '<button class="btn btn-line btn-sm" aria-label="Remove variable" title="Remove variable" onclick="this.parentElement.remove()">'+msIcon('close')+'</button>';
   $('envList').appendChild(row);
 }
 async function loadVersionOptions(integrationId, selected) {
@@ -556,7 +556,7 @@ function followJob(jobId, title) {
     c.innerHTML = job.lines.map(l => /^ERROR/.test(l) ? '<span class="err">' + esc(l) + '</span>' : esc(l)).join('\n');
     c.scrollTop = c.scrollHeight;
     if (job.status === 'running') { setTimeout(poll, 900); return; }
-    $('jobSub').innerHTML = job.status === 'success' ? '✓ complete' : '✕ failed';
+    $('jobSub').innerHTML = job.status === 'success' ? msIcon('check')+' complete' : msIcon('close')+' failed';
     $('jobClose').style.display = 'block';
     $('jobDone').style.display = 'block';
     if (job.status === 'success') { toast(title.split(' ')[0] + ' complete', 'ok'); refreshInstalledData(true); }
@@ -779,7 +779,7 @@ function openUpdate() {
 }
 async function applyUpdate() {
   const ref = ($('updRef') && $('updRef').value) || '';
-  const decision = await uiConfirm({ title: 'Update installer', message: 'Install build "' + (ref || 'default') + '"?', detail: 'The installer service will restart. Active integrations will keep running.', confirmText: 'Update & restart', icon: '↑' });
+  const decision = await uiConfirm({ title: 'Update installer', message: 'Install build "' + (ref || 'default') + '"?', detail: 'The installer service will restart. Active integrations will keep running.', confirmText: 'Update & restart', icon: 'upload' });
   if (!decision.confirmed) return;
   try {
     const { job_id } = await api('/api/update/apply', { method: 'POST', body: JSON.stringify({ ref: ref || null }) });
@@ -803,11 +803,11 @@ function followUpdate(jobId) {
     c.scrollTop = c.scrollHeight;
     if (job.status === 'running') { setTimeout(poll, 900); return; }
     if (job.status === 'success') {
-      $('jobSub').innerHTML = '✓ updated';
+      $('jobSub').innerHTML = msIcon('check')+' updated';
       if (UPD && UPD.service_restartable) awaitRestart();
       else { $('jobClose').style.display = 'block'; $('jobDone').style.display = 'block'; toast('Update applied', 'ok'); }
     } else {
-      $('jobSub').innerHTML = '✕ failed';
+      $('jobSub').innerHTML = msIcon('close')+' failed';
       $('jobClose').style.display = 'block';
       $('jobDone').style.display = 'block';
       toast('Update failed — see log', 'bad');
@@ -838,22 +838,8 @@ let REMOTES = { remotes: [], active: null };
 async function loadRemotes() {
   try {
     REMOTES = await api('/api/remotes');
-    renderRemoteSelector();
     if ($('remBack').classList.contains('show')) renderRemoteList();
   } catch (e) { /* token gate */ }
-}
-function activeRemote() { return (REMOTES.remotes || []).find(r => r.id === REMOTES.active) || null; }
-function renderRemoteSelector() {
-  const sel = $('remoteSelect');
-  const list = REMOTES.remotes || [];
-  if (!list.length) { sel.innerHTML = '<option value="">No remotes</option>'; return; }
-  sel.innerHTML = list.map(r => '<option value="' + r.id + '"' + (r.id === REMOTES.active ? ' selected' : '') +
-    '>' + esc(r.name) + '</option>').join('');
-}
-async function setActiveRemote(id) {
-  try { await api('/api/remotes/active', { method: 'POST', body: JSON.stringify({ id: id || null }) });
-    REMOTES.active = id || null;
-  } catch (e) { toast(e.message, 'bad'); }
 }
 function openRemotes() { showWorkspacePanel('remBack'); resetRemoteForm(); closeRemoteForm(); loadRemotes(); }
 function openRemoteForm() { resetRemoteForm(); $('remoteEditor').classList.add('show'); $('remName').focus(); }
@@ -863,13 +849,11 @@ function renderRemoteList() {
   const list = REMOTES.remotes || [];
   if (!list.length) { box.innerHTML = '<div class="empty" style="padding:48px 20px"><h3>No remotes configured</h3><p>Add a remote to register and manage external integrations.</p></div>'; return; }
   box.innerHTML = list.map(r => {
-    const active = r.id === REMOTES.active;
-    return '<div class="rem-row' + (active ? ' active' : '') + '" id="rem-' + r.id + '">' +
-      '<div><div class="rem-name">' + esc(r.name) + (active ? ' <span class="active-tag">active</span>' : '') + '</div>' +
+    return '<div class="rem-row" id="rem-' + r.id + '">' +
+      '<div><div class="rem-name">' + esc(r.name) + '</div>' +
         '<div class="rem-addr">' + esc(r.scheme + '://' + r.host + ':' + r.port) +
           (r.has_api_key ? ' · api key' : (r.has_pin ? ' · pin' : ' · no auth')) + '</div></div>' +
       '<div class="rem-actions">' +
-        (active ? '' : '<button class="btn btn-line btn-sm" onclick="setActiveRemote(\'' + r.id + '\').then(loadRemotes)">Set active</button>') +
         '<button class="btn btn-line btn-sm" onclick="testRemote(\'' + r.id + '\')">Test</button>' +
         '<button class="btn btn-line btn-sm" onclick="viewDrivers(\'' + r.id + '\')">Drivers</button>' +
         '<button class="btn btn-line btn-sm" onclick="editRemote(\'' + r.id + '\')">Edit</button>' +
@@ -971,9 +955,9 @@ async function deleteRemote(rid) {
   catch (e) { toast(e.message, 'bad'); }
 }
 async function registerIntegration(id, remoteId) {
-  const targetRemote = remoteId || REMOTES.active;
-  if (!targetRemote) { toast('Add and select a remote first', 'bad'); openRemotes(); return; }
-  const r = (REMOTES.remotes || []).find(x => x.id === targetRemote) || activeRemote();
+  const targetRemote = remoteId || (REMOTES.remotes || [])[0]?.id;
+  if (!targetRemote) { toast('Add a remote first', 'bad'); openRemotes(); return; }
+  const r = (REMOTES.remotes || []).find(x => x.id === targetRemote);
   const it = INSTALLED.find(x => x.id === id);
   if (it && it.status !== 'running') {
     const decision = await uiConfirm({ title: 'Register stopped integration', message: 'This integration is not running.', detail: 'The remote may fail to connect until the integration is started.', confirmText: 'Register anyway', icon: '!' });
@@ -1340,13 +1324,13 @@ function renderInstalled(){
   visible.forEach(it=>{ const running=it.status==='running', rc=it.restart_count||0, upd=UPDATES[it.id]||{}, regs=REGS[it.id]||[], st=STATS[it.id]||{}, health=st.health||it.health||(running?'starting':'unknown'), expanded=EXPANDED.has(it.id), selected=SELECTED_INSTALLED.has(it.id), looping=(it.status==='restarting'||it.status==='exited')&&rc>=3;
     const row=document.createElement('article'); row.className='row integration-row'+(selected?' selected':''); row.tabIndex=0; row.setAttribute('aria-selected',selected?'true':'false'); row.setAttribute('role','option'); row.dataset.instanceId=it.id; row.onclick=e=>handleInstalledRowClick(e,it.id); row.onkeydown=e=>handleInstalledRowKey(e,it.id);
     row.innerHTML='<div class="integration-row-main"><div class="integration-row-state '+stateRailClass(it.status)+'" title="Container: '+esc(it.status)+'"></div><div class="integration-row-content"><div class="integration-row-head"><span class="integration-row-title">'+esc(it.label||it.name)+'</span><span class="integration-title-actions">'+
-      '<button class="row-icon-btn" title="Stop integration" aria-label="Stop '+esc(it.label||it.name)+'" '+(!running?'disabled':'')+' onclick="lifecycle(\''+it.id+'\',\'stop\')">■</button>'+
-      '<button class="row-icon-btn" title="Restart integration" aria-label="Restart '+esc(it.label||it.name)+'" onclick="lifecycle(\''+it.id+'\',\'restart\')">↻</button>'+
+      '<button class="row-icon-btn" title="Stop integration" aria-label="Stop '+esc(it.label||it.name)+'" '+(!running?'disabled':'')+' onclick="lifecycle(\''+it.id+'\',\'stop\')">'+msIcon('stop')+'</button>'+
+      '<button class="row-icon-btn" title="Restart integration" aria-label="Restart '+esc(it.label||it.name)+'" onclick="lifecycle(\''+it.id+'\',\'restart\')">'+msIcon('restart_alt')+'</button>'+
       '<span class="menu-wrap"><button class="row-icon-btn register" title="Register on a remote" aria-label="Register '+esc(it.label||it.name)+' on a remote" onclick="toggleRegisterMenu(event,\''+it.id+'\')">+</button><div class="menu register-menu" id="reg-menu-'+it.id+'">'+remoteRegisterMenuHtml(it)+'</div></span></span>'+
-      (upd.update_available?'<span class="upd-badge" onclick="openVersion(\''+it.id+'\')">update ▸ '+esc(fmtVer(upd.latest_version||''))+'</span>':'')+'</div><div class="integration-row-sub">'+esc(it.id)+(it.driver_id?' · '+esc(it.driver_id):'')+'</div>'+
+      (upd.update_available?'<span class="upd-badge" onclick="openVersion(\''+it.id+'\')">update '+esc(fmtVer(upd.latest_version||''))+'</span>':'')+'</div><div class="integration-row-sub">'+esc(it.id)+(it.driver_id?' · '+esc(it.driver_id):'')+'</div>'+
       '<div class="state-group"><span class="state-pill '+statusTone(it.status)+'">container · '+esc(it.status)+'</span><span class="state-pill '+statusTone(health)+'">health · '+esc(health)+'</span><span class="state-pill '+(regs.length?'good':'warn')+'">remote · '+(regs.length?esc(regs.map(r=>r.remote_name).join(', ')):'unregistered')+'</span><span class="state-pill '+(upd.update_available?'warn':'good')+'">version · '+(upd.update_available?'update available':'current')+'</span></div>'+
       '<div class="integration-row-meta"><span>port <strong>'+esc(String(it.port))+'</strong></span><span>version <strong>'+esc(fmtVer(it.version||'latest'))+'</strong></span><span>cpu <strong>'+(st.cpu_pct!=null?esc(String(st.cpu_pct))+'%':'—')+'</strong></span><span>memory <strong>'+(st.mem_used!=null?fmtBytes(st.mem_used):'—')+'</strong></span><span>uptime <strong>'+fmtUptime(st.started_at)+'</strong></span></div>'+(looping?'<div class="integration-row-alert">Crash loop detected. Open details to inspect logs and management options.</div>':'')+'</div>'+
-      '<button class="integration-row-chevron'+(expanded?' open':'')+'" title="'+(expanded?'Hide':'Show')+' details" aria-label="'+(expanded?'Hide':'Show')+' details for '+esc(it.label||it.name)+'" onclick="toggleDetails(\''+it.id+'\')"><span>›</span></button></div>'+(expanded?'<div class="details">'+detailsHtml(it)+'</div>':''); box.appendChild(row);
+      '<button class="integration-row-chevron'+(expanded?' open':'')+'" title="'+(expanded?'Hide':'Show')+' details" aria-label="'+(expanded?'Hide':'Show')+' details for '+esc(it.label||it.name)+'" onclick="toggleDetails(\''+it.id+'\')"><span>'+msIcon('chevron_right')+'</span></button></div>'+(expanded?'<div class="details">'+detailsHtml(it)+'</div>':''); box.appendChild(row);
   }); updateBulkBar();
 }
 async function setAutoUpdate(id,enabled){ try{await api('/api/instances/'+id+'/auto-update',{method:'POST',body:JSON.stringify({enabled})}); const it=INSTALLED.find(x=>x.id===id); if(it)it.auto_update=enabled; toast('Auto-update '+(enabled?'enabled':'disabled'),'ok');}catch(e){toast(e.message,'bad');loadInstalled();} }
@@ -1396,7 +1380,7 @@ function toggleOperationDrawer(){
   const drawer=$('operationDrawer'); if(!drawer)return;
   const open=drawer.classList.toggle('open');
   const button=drawer.querySelector('.operation-head'); if(button)button.setAttribute('aria-expanded',String(open));
-  if($('operationChevron')) $('operationChevron').textContent='⌄';
+  if($('operationChevron')) $('operationChevron').textContent='';
   requestAnimationFrame(updateFloatingOffsets);
 }
 function followJob(jobId,title){

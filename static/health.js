@@ -38,7 +38,7 @@
         <div class="health-head-actions">
           <span class="health-updated" id="healthUpdated">Not loaded</span>
           <label class="health-auto"><input id="healthAutoRefresh" type="checkbox" checked onchange="setHealthAutoRefresh(this.checked)"> Auto-refresh</label>
-          <button class="btn btn-line" id="healthRefreshBtn" onclick="refreshHealth(true)">↻ Refresh</button>
+          <button class="btn btn-line" id="healthRefreshBtn" onclick="refreshHealth(true)"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg> Refresh</button>
           <button class="btn btn-line" onclick="closeModal('healthBack')">Back</button>
         </div>
       </header>
@@ -122,7 +122,7 @@
     if (refreshing || !panel?.classList.contains('show')) return;
     refreshing = true;
     const button = document.getElementById('healthRefreshBtn');
-    if (button) { button.disabled = true; button.textContent = '↻ Refreshing…'; }
+    if (button) { button.disabled = true; button.textContent = '<svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg> Refreshing…'; }
     try {
       const data = await api('/api/health/overview', {timeout: 12000, dedupe: false});
       render(data);
@@ -131,7 +131,7 @@
       if (typeof window.operationNotice === 'function') window.operationNotice('Health refresh failed', error.message || 'Could not load health information.', 'failed', {retry: () => refreshHealth(true)});
     } finally {
       refreshing = false;
-      if (button) { button.disabled = false; button.textContent = '↻ Refresh'; }
+      if (button) { button.disabled = false; button.textContent = '<svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg> Refresh'; }
     }
   };
 

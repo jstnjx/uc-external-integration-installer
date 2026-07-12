@@ -4,7 +4,7 @@
   const controls=document.querySelector('#logBack .body');
   if(controls){
     const indicator=document.createElement('button'); indicator.id='newLogLines'; indicator.className='new-log-lines'; indicator.onclick=()=>{st.newLogLines=0;indicator.classList.remove('show');jumpToLatestLogs();indicator.textContent='';}; controls.appendChild(indicator);
-    const nav=document.createElement('div'); nav.className='log-error-nav'; nav.innerHTML='<button class="btn btn-line btn-sm" id="prevLogError">↑ Previous error</button><span id="logErrorCounts">0 errors · 0 warnings</span><button class="btn btn-line btn-sm" id="nextLogError">Next error ↓</button>'; const consoleEl=$('logConsole'); consoleEl?.before(nav);
+    const nav=document.createElement('div'); nav.className='log-error-nav'; nav.innerHTML='<button class="btn btn-line btn-sm" id="prevLogError">'+msIcon('arrow_upward')+' Previous error</button><span id="logErrorCounts">0 errors · 0 warnings</span><button class="btn btn-line btn-sm" id="nextLogError">Next error '+msIcon('arrow_upward','rotate-180')+'</button>'; const consoleEl=$('logConsole'); consoleEl?.before(nav);
     let errorIndex=-1;
     function jumpError(dir){const rows=[...consoleEl.querySelectorAll('.log-line[data-level="error"]:not(.filtered-out)')];if(!rows.length)return;errorIndex=(errorIndex+dir+rows.length)%rows.length;rows[errorIndex].scrollIntoView({block:'center',behavior:'smooth'});rows[errorIndex].focus?.();}
     $('prevLogError').onclick=()=>jumpError(-1); $('nextLogError').onclick=()=>jumpError(1);

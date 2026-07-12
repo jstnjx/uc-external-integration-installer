@@ -15,7 +15,6 @@
   const la=window.loadActivity;window.loadActivity=async function(){if($('actList'))$('actList').innerHTML=rows(4);return la();};
   const lm=window.loadMainSettings;window.loadMainSettings=async function(){document.querySelectorAll('#maintBack .settings-section').forEach(s=>s.classList.add('loading-section'));try{return await lm();}finally{document.querySelectorAll('#maintBack .settings-section').forEach(s=>s.classList.remove('loading-section'));}};
   const cu=window.checkUpdate;window.checkUpdate=async function(){if($('updBodyContent'))$('updBodyContent').innerHTML=rows(2);return cu();};
-  const sar=window.setActiveRemote;window.setActiveRemote=async function(id){const r=await sar(id);AppStore.state.activeRemote=id;AppStore.persist();return r;};
 })();
 
 /* Route all transient feedback through Operations instead of toast popups. */

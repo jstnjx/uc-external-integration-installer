@@ -5,11 +5,12 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>UC External Integration Installer</title>
-<link rel="icon" href="/static/favicon.svg?v=5.4.0" type="image/svg+xml"/>
+<link rel="icon" href="/static/favicon.svg?v=5.5.0" type="image/svg+xml"/>
+<link rel="preload" href="/static/material-symbols.svg?v=5.5.0" as="image" type="image/svg+xml"/>
 <link href="https://fonts.googleapis.com" rel="preconnect"/>
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
-<link rel="stylesheet" href="/static/styles.css?v=5.4.0">
+<link rel="stylesheet" href="/static/styles.css?v=5.5.0">
 </head>
 <body>
 <header class="bar">
@@ -30,15 +31,11 @@
 <div class="stat" id="lockStat" style="display:none"><span class="led warn"></span> locked</div>
 </div>
 <div class="header-actions">
-<div class="remote-picker">
-<span class="remote-label">Remote</span>
-<select id="remoteSelect" onchange="setActiveRemote(this.value)" title="Active remote"></select>
-</div>
-<button class="nav-action" onclick="openRemotes()" title="Manage remotes"><span>⚙</span><b>Remotes</b></button>
-<button class="nav-action" onclick="openInstallerLogs()" title="Installer logs"><span>▤</span><b>Logs</b></button>
-<button class="nav-action" onclick="openActivity()" title="Activity log"><span>≣</span><b>Activity</b></button>
-<button class="nav-action" onclick="openHealth()" title="System health"><span>♥</span><b>Health</b></button>
-<button class="nav-action" onclick="openMaint()" title="Settings"><span>⛭</span><b>Settings</b></button>
+<button class="nav-action" onclick="openRemotes()" title="Manage remotes"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#devices"></use></svg><b>Remotes</b></button>
+<button class="nav-action" onclick="openInstallerLogs()" title="Installer logs"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#terminal"></use></svg><b>Logs</b></button>
+<button class="nav-action" onclick="openActivity()" title="Activity log"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#history"></use></svg><b>Activity</b></button>
+<button class="nav-action" onclick="openHealth()" title="System health"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#health"></use></svg><b>Health</b></button>
+<button class="nav-action" onclick="openMaint()" title="Settings"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#settings"></use></svg><b>Settings</b></button>
 </div>
 </div>
 </header>
@@ -75,7 +72,7 @@
 <div class="section-head">
 <div><h3>Integration catalog</h3><p>Install supported integrations or create additional instances.</p></div>
 <div class="section-actions">
-<button class="btn btn-line" onclick="refreshRegistry()">↻ Refresh registry</button>
+<button class="btn btn-line" onclick="refreshRegistry()"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg> Refresh registry</button>
 <button class="btn btn-primary" id="archiveBtn" onclick="$('archiveFile').click()" style="display:none" title="Install from an Unfolded Circle release .tar.gz (ARM64 host only)">Install from file</button>
 </div>
 </div>
@@ -89,7 +86,7 @@
 <section id="installed">
 <div class="section-head">
 <div><h3>Installed instances</h3><p>Monitor runtime state, manage versions, and register drivers.</p></div>
-<button class="btn btn-line" onclick="refreshInstalledData(true)">↻ Refresh status</button>
+<button class="btn btn-line" onclick="refreshInstalledData(true)"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#refresh"></use></svg> Refresh status</button>
 </div>
 <div class="control-bar installed-controls">
 <div class="search"><input id="installedSearch" oninput="renderInstalled();saveInstalledView()" placeholder="Search name, ID, driver, port, or repository…"/></div>
@@ -106,7 +103,7 @@
 <div class="workspace-view">
 <header>
 <h2 id="cfgTitle">Install</h2><span class="sub" id="cfgSub"></span>
-<button aria-label="Back" class="x" onclick="closeModal('cfgBack')" title="Back">←</button>
+<button aria-label="Back" class="x" onclick="closeModal('cfgBack')" title="Back"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#arrow_back"></use></svg></button>
 </header>
 <div class="body">
 <div class="field" id="cfgVersionField">
@@ -135,7 +132,7 @@
 <div class="workspace-view">
 <header>
 <h2 id="jobTitle">Working…</h2><span class="sub" id="jobSub"><span class="spin"></span></span>
-<button aria-label="Back" class="x" id="jobClose" onclick="closeModal('jobBack')" style="display:none" title="Back">←</button>
+<button aria-label="Back" class="x" id="jobClose" onclick="closeModal('jobBack')" style="display:none" title="Back"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#arrow_back"></use></svg></button>
 </header>
 <div class="body"><div class="console" id="jobConsole"></div></div>
 <div class="foot"><button class="btn btn-primary" id="jobDone" onclick="closeJob()" style="display:none">Done</button></div>
@@ -144,7 +141,7 @@
 <div class="workspace-view">
 <header>
 <h2>Remotes</h2><span class="sub">register integrations to your UC remotes</span>
-<button aria-label="Back" class="x" onclick="closeModal('remBack')" title="Back">←</button>
+<button aria-label="Back" class="x" onclick="closeModal('remBack')" title="Back"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#arrow_back"></use></svg></button>
 </header>
 <div class="body">
 <div class="remote-page-toolbar">
@@ -153,7 +150,7 @@
 </div>
 <div id="remList"></div>
 <div class="remote-editor" id="remoteEditor">
-<div class="remote-editor-head"><h3 id="remFormTitle">Add a remote</h3><button class="btn-icon" onclick="closeRemoteForm()" title="Close">×</button></div>
+<div class="remote-editor-head"><h3 id="remFormTitle">Add a remote</h3><button class="btn-icon" onclick="closeRemoteForm()" title="Close"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#close"></use></svg></button></div>
 <input id="remEditId" type="hidden" value=""/>
 <div class="det-grid">
 <div class="field"><label>Name</label><input id="remName" placeholder="Living room remote"/></div>
@@ -171,7 +168,7 @@
 <div class="workspace-view">
 <header>
 <h2>Software update</h2><span class="sub" id="updRepo"></span>
-<button aria-label="Back" class="x" onclick="closeModal('updBack')" title="Back">←</button>
+<button aria-label="Back" class="x" onclick="closeModal('updBack')" title="Back"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#arrow_back"></use></svg></button>
 </header>
 <div class="body">
 <div class="field" id="updBuildField">
@@ -193,7 +190,7 @@
 <button class="btn btn-line btn-sm" id="logFollowBtn" onclick="toggleFollow()" style="margin-left:auto">Follow</button>
 <button class="btn btn-line btn-sm" onclick="refreshLogs()">Refresh</button>
 <button class="btn btn-line btn-sm" onclick="downloadLogs()">Download</button>
-<button aria-label="Back" class="x" onclick="closeLogs()" title="Back">←</button>
+<button aria-label="Back" class="x" onclick="closeLogs()" title="Back"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#arrow_back"></use></svg></button>
 </header>
 <div class="body">
 <div class="log-toolbar">
@@ -218,13 +215,13 @@
 <header>
 <h2>Activity</h2><span class="sub">recent events</span>
 <button class="btn btn-line btn-sm" onclick="loadActivity()" style="margin-left:auto">Refresh</button>
-<button aria-label="Back" class="x" onclick="closeModal('actBack')" title="Back">←</button>
+<button aria-label="Back" class="x" onclick="closeModal('actBack')" title="Back"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#arrow_back"></use></svg></button>
 </header>
 <div class="body"><div id="actList"></div></div>
 </div>
 </div><div class="workspace-panel" data-workspace-panel="true" id="maintBack">
 <div class="workspace-view">
-<header><h2>Settings</h2><span class="sub">installer configuration · notifications · system operations</span><button aria-label="Back" class="x" onclick="closeModal('maintBack')" title="Back">←</button></header>
+<header><h2>Settings</h2><span class="sub">installer configuration · notifications · system operations</span><button aria-label="Back" class="x" onclick="closeModal('maintBack')" title="Back"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#arrow_back"></use></svg></button></header>
 <div class="body"><div class="settings-grid">
 <section class="settings-section" data-settings-tab="general">
 <h3>Integration defaults</h3><div class="hint">Configure the integration port range and registry catalog.</div>
@@ -380,19 +377,19 @@
   </div>
 </div>
 
-<aside class="operation-drawer hidden" id="operationDrawer" aria-label="Operations"><button class="operation-head" onclick="toggleOperationDrawer()" aria-expanded="false"><span>Operations</span><span id="operationSummary">No active operations</span><b class="operation-chevron" id="operationChevron">⌄</b></button><div class="operation-list" id="operationList"></div></aside>
-<button class="back-to-top" id="backToTop" type="button" aria-label="Back to top" title="Back to top" onclick="scrollToTop()"><span>↑</span></button>
+<aside class="operation-drawer hidden" id="operationDrawer" aria-label="Operations"><button class="operation-head" onclick="toggleOperationDrawer()" aria-expanded="false"><span>Operations</span><span id="operationSummary">No active operations</span><b class="operation-chevron" id="operationChevron"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#expand_more"></use></svg></b></button><div class="operation-list" id="operationList"></div></aside>
+<button class="back-to-top" id="backToTop" type="button" aria-label="Back to top" title="Back to top" onclick="scrollToTop()"><svg class="ms-icon" aria-hidden="true"><use href="/static/material-symbols.svg#arrow_upward"></use></svg></button>
 <div id="toasts"></div>
-<script src="/static/api.js?v=5.4.0"></script>
-<script src="/static/app.js?v=5.4.0"></script>
-<script src="/static/navigation.js?v=5.4.0"></script>
-<script src="/static/dialogs.js?v=5.4.0"></script>
-<script src="/static/logs.js?v=5.4.0"></script>
-<script src="/static/installed.js?v=5.4.0"></script>
-<script src="/static/remotes.js?v=5.4.0"></script>
-<script src="/static/settings.js?v=5.4.0"></script>
-<script src="/static/operations.js?v=5.4.0"></script>
-<script src="/static/enhancements.js?v=5.4.0"></script>
-<script src="/static/health.js?v=5.4.0"></script>
+<script src="/static/api.js?v=5.5.0"></script>
+<script src="/static/app.js?v=5.5.0"></script>
+<script src="/static/navigation.js?v=5.5.0"></script>
+<script src="/static/dialogs.js?v=5.5.0"></script>
+<script src="/static/logs.js?v=5.5.0"></script>
+<script src="/static/installed.js?v=5.5.0"></script>
+<script src="/static/remotes.js?v=5.5.0"></script>
+<script src="/static/settings.js?v=5.5.0"></script>
+<script src="/static/operations.js?v=5.5.0"></script>
+<script src="/static/enhancements.js?v=5.5.0"></script>
+<script src="/static/health.js?v=5.5.0"></script>
 </body>
 </html>

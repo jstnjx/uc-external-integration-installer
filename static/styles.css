@@ -854,3 +854,25 @@
 .input-suffix input{border:0!important;border-radius:0!important}
 .input-suffix span{padding:0 12px;color:var(--muted);font-size:12px}
 @media(max-width:640px){.update-policy-schedule.show{grid-template-columns:1fr}}
+
+/* ---------- local Material Symbols (SVG sprite, weight 100) ---------- */
+.ms-icon{width:1.15em;height:1.15em;display:inline-block;vertical-align:-.18em;fill:none;stroke:currentColor;stroke-width:1.15;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.nav-action>.ms-icon{color:var(--muted);font-size:16px}.nav-action:hover>.ms-icon{color:var(--yellow)}
+.btn>.ms-icon,.btn-icon>.ms-icon,.row-icon-btn>.ms-icon,.x>.ms-icon,.back-to-top>.ms-icon{font-size:17px}
+.row-icon-btn .ms-icon{width:18px;height:18px}.selection-marker .ms-icon{width:15px;height:15px;stroke-width:1.4}
+.operation-chevron .ms-icon{width:18px;height:18px;transition:transform .18s var(--ease)}
+.operation-drawer.open .operation-chevron .ms-icon{transform:rotate(180deg)}
+.rotate-180{transform:rotate(180deg)}
+
+/* Settings content should never collide with the following section. */
+.settings-section .settings-actions{align-items:center;max-width:100%;margin-bottom:4px}
+.settings-section .settings-actions .btn{max-width:100%;white-space:normal}
+.settings-section .field + .field{margin-top:20px}
+.effect-tag{display:none!important}
+
+/* Keep floating controls side-by-side on narrow screens. */
+@media(max-width:760px){
+  .operation-drawer{left:64px!important;right:8px!important;width:auto!important;max-height:72vh}
+  .back-to-top{left:8px!important;bottom:8px!important}
+  .operation-drawer{bottom:8px!important}
+}
