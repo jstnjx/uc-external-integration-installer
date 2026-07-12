@@ -351,7 +351,7 @@
   .dialog-confirm.danger:hover { background: #dc2626; }
 
   /* ---------- toasts ---------- */
-  #toasts { position: fixed; bottom: 24px; right: 24px; z-index: 80; display: flex;
+  #toasts { position: fixed; bottom: var(--toast-bottom, 24px); right: 24px; z-index: 80; display: flex;
     flex-direction: column; gap: 10px; }
   .toast { background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--yellow);
     padding: 13px 16px; border-radius: var(--r-md); font-size: 13.5px; color: var(--body-strong);
@@ -624,10 +624,13 @@
   .state-pill.bad { color:var(--rose); background:rgba(239,68,68,.08); border-color:rgba(239,68,68,.2); }
   .auto-toggle { display:inline-flex; align-items:center; gap:7px; color:var(--muted); font-size:12px; cursor:pointer; padding:5px 8px; border:1px solid var(--line); border-radius:var(--r-md); background:var(--soft); }
   .auto-toggle input { accent-color:var(--yellow); }
-  .operation-drawer { position:fixed; right:24px; bottom:24px; width:min(420px,calc(100vw - 32px)); z-index:70; background:var(--soft); border:1px solid var(--line); border-radius:var(--r-lg); overflow:hidden; box-shadow:0 20px 50px rgba(0,0,0,.45); }
+  .operation-drawer { position:fixed; right:24px; bottom:24px; width:min(420px,calc(100vw - 32px)); z-index:70; background:var(--soft); border:1px solid var(--line); border-radius:var(--r-lg); overflow:hidden; box-shadow:0 20px 50px rgba(0,0,0,.45); transition:opacity .16s var(--ease), transform .16s var(--ease); }
+  .operation-drawer.hidden { opacity:0; pointer-events:none; transform:translateY(8px); }
   .operation-head { width:100%; display:flex; align-items:center; gap:10px; border:0; background:var(--card); color:var(--ink); padding:11px 13px; cursor:pointer; text-align:left; }
   .operation-head span:first-child { font-weight:700; }
   .operation-head span:nth-child(2) { margin-left:auto; color:var(--muted); font:11px var(--mono); }
+  .operation-chevron { width:18px; color:var(--muted); font-size:17px; line-height:1; text-align:center; transition:transform .16s var(--ease), color .16s var(--ease); }
+  .operation-drawer.open .operation-chevron { color:var(--yellow); transform:rotate(180deg); }
   .operation-list { display:none; max-height:300px; overflow:auto; }
   .operation-drawer.open .operation-list { display:block; }
   .operation-item { padding:11px 13px; border-top:1px solid var(--line); }
@@ -635,6 +638,20 @@
   .operation-meta { color:var(--muted); font:11px var(--mono); margin-top:5px; }
   .operation-progress { height:3px; background:var(--line); margin-top:8px; overflow:hidden; border-radius:3px; }
   .operation-progress span { display:block; height:100%; background:var(--yellow); transition:width .2s; }
+
+  .back-to-top {
+    position:fixed; left:24px; bottom:24px; z-index:75;
+    width:42px; height:42px; display:grid; place-items:center;
+    border:1px solid var(--line); border-radius:var(--pill);
+    background:var(--card); color:var(--body-strong); cursor:pointer;
+    box-shadow:0 14px 35px rgba(0,0,0,.35);
+    opacity:0; pointer-events:none; transform:translateY(10px);
+    transition:opacity .16s var(--ease), transform .16s var(--ease), border-color .16s var(--ease), background .16s var(--ease);
+  }
+  .back-to-top.show { opacity:1; pointer-events:auto; transform:none; }
+  .back-to-top:hover { border-color:var(--line-2); background:var(--elev); color:var(--yellow); }
+  .back-to-top span { font-size:19px; line-height:1; transform:translateY(-1px); }
+
   .compact-check { white-space:nowrap; padding:0 4px; font-size:12px; }
   .log-view.no-wrap .log-message { white-space:pre; }
   .log-view.hide-time .log-time { display:none; }
@@ -644,7 +661,7 @@
   .field-error { color:var(--rose); font-size:12px; margin-top:5px; }
   .rem-telemetry { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
   .rem-telemetry span { font:11px var(--mono); color:var(--muted); padding:2px 7px; border:1px solid var(--line); border-radius:var(--pill); }
-  @media(max-width:900px){ .installed-controls .filter{flex:1 1 180px}.operation-drawer{right:16px;bottom:16px}.integration-row-main{align-items:flex-start} }
+  @media(max-width:900px){ .installed-controls .filter{flex:1 1 180px}.operation-drawer{right:16px;bottom:16px}.back-to-top{left:16px;bottom:16px}.integration-row-main{align-items:flex-start} }
 
   /* ---------- selectable installed rows ---------- */
   .integration-row {
@@ -1073,7 +1090,8 @@
   </div>
 </div>
 
-<aside class="operation-drawer" id="operationDrawer" aria-label="Operations"><button class="operation-head" onclick="toggleOperationDrawer()"><span>Operations</span><span id="operationSummary">No active operations</span><b id="operationChevron">⌃</b></button><div class="operation-list" id="operationList"></div></aside>
+<aside class="operation-drawer hidden" id="operationDrawer" aria-label="Operations"><button class="operation-head" onclick="toggleOperationDrawer()" aria-expanded="false"><span>Operations</span><span id="operationSummary">No active operations</span><b class="operation-chevron" id="operationChevron">⌄</b></button><div class="operation-list" id="operationList"></div></aside>
+<button class="back-to-top" id="backToTop" type="button" aria-label="Back to top" title="Back to top" onclick="scrollToTop()"><span>↑</span></button>
 <div id="toasts"></div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -2413,11 +2431,61 @@ const _hideWorkspacePanel=hideWorkspacePanel; hideWorkspacePanel=function(id){ _
 function applyRoute(){ const r=(location.hash||'#/browse').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='settings'){openMaint();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
 window.addEventListener('popstate',applyRoute);
 
-function addOperation(id,title){ OPERATIONS.set(id,{id,title,status:'running',lines:[],progress:5}); renderOperations(); }
-function updateOperation(id,patch){ const op=OPERATIONS.get(id)||{id,title:id,status:'running',lines:[],progress:5}; Object.assign(op,patch); OPERATIONS.set(id,op); renderOperations(); }
-function renderOperations(){ const ops=Array.from(OPERATIONS.values()).slice(-8).reverse(); const active=ops.filter(o=>o.status==='running').length; if($('operationSummary'))$('operationSummary').textContent=active?active+' active':(ops.length?ops[0].status:'No active operations'); if($('operationList'))$('operationList').innerHTML=ops.length?ops.map(o=>'<div class="operation-item"><div class="operation-row"><span>'+esc(o.title)+'</span><span>'+esc(o.status)+'</span></div><div class="operation-meta">'+esc((o.lines||[]).slice(-1)[0]||'Queued')+'</div><div class="operation-progress"><span style="width:'+(o.status==='success'?100:o.status==='failed'?100:Math.min(95,o.progress||10))+'%"></span></div></div>').join(''):'<div class="empty" style="padding:24px">No operations yet</div>'; }
-function toggleOperationDrawer(){ $('operationDrawer')?.classList.toggle('open'); }
-function followJob(jobId,title){ addOperation(jobId,title); const poll=async()=>{let job;try{job=await api('/api/jobs/'+jobId);}catch(e){updateOperation(jobId,{status:'failed',lines:[e.message]});return;} updateOperation(jobId,{status:job.status,lines:job.lines||[],progress:Math.min(90,10+(job.lines||[]).length*3)}); if(job.status==='running'){setTimeout(poll,900);return;} if(job.status==='success'){toast(title.split(' ')[0]+' complete','ok');loadInstalled();loadUpdates();loadRegistrations();}else toast('Job failed — open Operations for details','bad');}; poll(); $('operationDrawer')?.classList.add('open'); }
+const OPERATION_TTL = { success: 12000, failed: 30000 };
+const operationCleanupTimers = new Map();
+function scheduleOperationCleanup(id,status){
+  if(operationCleanupTimers.has(id)) clearTimeout(operationCleanupTimers.get(id));
+  const ttl=OPERATION_TTL[status]; if(!ttl) return;
+  operationCleanupTimers.set(id,setTimeout(()=>{
+    OPERATIONS.delete(id); operationCleanupTimers.delete(id); renderOperations();
+  },ttl));
+}
+function addOperation(id,title){
+  if(operationCleanupTimers.has(id)){clearTimeout(operationCleanupTimers.get(id));operationCleanupTimers.delete(id);}
+  OPERATIONS.set(id,{id,title,status:'running',lines:[],progress:5}); renderOperations();
+}
+function updateOperation(id,patch){
+  const op=OPERATIONS.get(id)||{id,title:id,status:'running',lines:[],progress:5};
+  Object.assign(op,patch); OPERATIONS.set(id,op);
+  if(op.status==='success'||op.status==='failed') scheduleOperationCleanup(id,op.status);
+  renderOperations();
+}
+function updateFloatingOffsets(){
+  const drawer=$('operationDrawer'), toasts=$('toasts'); if(!toasts)return;
+  const visible=drawer&&!drawer.classList.contains('hidden');
+  const height=visible?drawer.getBoundingClientRect().height:0;
+  document.documentElement.style.setProperty('--toast-bottom',(visible?height+36:24)+'px');
+}
+function renderOperations(){
+  const ops=Array.from(OPERATIONS.values()).slice(-8).reverse(), active=ops.filter(o=>o.status==='running').length;
+  const drawer=$('operationDrawer');
+  if(drawer) drawer.classList.toggle('hidden',ops.length===0);
+  if($('operationSummary')) $('operationSummary').textContent=active?active+' active':(ops.length?ops.length+' recent':'No active operations');
+  if($('operationList')) $('operationList').innerHTML=ops.length?ops.map(o=>'<div class="operation-item"><div class="operation-row"><span>'+esc(o.title)+'</span><span>'+esc(o.status)+'</span></div><div class="operation-meta">'+esc((o.lines||[]).slice(-1)[0]||'Queued')+'</div><div class="operation-progress"><span style="width:'+(o.status==='success'||o.status==='failed'?100:Math.min(95,o.progress||10))+'%"></span></div></div>').join(''):'';
+  requestAnimationFrame(updateFloatingOffsets);
+}
+function toggleOperationDrawer(){
+  const drawer=$('operationDrawer'); if(!drawer)return;
+  const open=drawer.classList.toggle('open');
+  const button=drawer.querySelector('.operation-head'); if(button)button.setAttribute('aria-expanded',String(open));
+  if($('operationChevron')) $('operationChevron').textContent='⌄';
+  requestAnimationFrame(updateFloatingOffsets);
+}
+function followJob(jobId,title){
+  addOperation(jobId,title);
+  const poll=async()=>{let job;try{job=await api('/api/jobs/'+jobId);}catch(e){updateOperation(jobId,{status:'failed',lines:[e.message]});return;}
+    updateOperation(jobId,{status:job.status,lines:job.lines||[],progress:Math.min(90,10+(job.lines||[]).length*3)});
+    if(job.status==='running'){setTimeout(poll,900);return;}
+    if(job.status==='success'){toast(title.split(' ')[0]+' complete','ok');loadInstalled();loadUpdates();loadRegistrations();}
+    else toast('Job failed — open Operations for details','bad');
+  };
+  poll(); const drawer=$('operationDrawer'); if(drawer){drawer.classList.remove('hidden');drawer.classList.add('open');drawer.querySelector('.operation-head')?.setAttribute('aria-expanded','true');requestAnimationFrame(updateFloatingOffsets);}
+}
+function scrollToTop(){ window.scrollTo({top:0,behavior:'smooth'}); }
+function updateBackToTop(){ $('backToTop')?.classList.toggle('show',window.scrollY>520); }
+window.addEventListener('scroll',updateBackToTop,{passive:true});
+window.addEventListener('resize',updateFloatingOffsets);
+window.addEventListener('load',()=>{updateBackToTop();updateFloatingOffsets();});
 
 function toggleLogPause(){ LOG_PAUSED=!LOG_PAUSED; if($('logPauseBtn'))$('logPauseBtn').textContent=LOG_PAUSED?'Resume':'Pause'; if(!LOG_PAUSED&&LOG_PENDING.length){LOG_PENDING.splice(0).forEach(appendLogLine);applyLogFilters();} }
 function jumpToLatestLogs(){ LOG_AT_LATEST=true; scrollLogsToLatest(true); }
