@@ -457,8 +457,8 @@
   #maintBack .workspace-view > .body,
   #setupBack .workspace-view > .body,
   #cfgBack .workspace-view > .body,
-  #updBack .workspace-view > .body { max-width: 920px; width: 100%; }
-  #actBack .workspace-view > .body { max-width: 1040px; width: 100%; }
+  #updBack .workspace-view > .body,
+  #actBack .workspace-view > .body { width: 100%; max-width: none; }
   #logBack .workspace-view > header .x { margin-left: 0; }
   #logBack .workspace-view > header h2 { order: 1; }
   #logBack .workspace-view > header .sub { order: 2; }
@@ -474,6 +474,62 @@
     .workspace-view > .foot { flex-wrap: wrap; }
     .workspace-view > .foot .btn { flex: 1 1 auto; }
   }
+
+  /* ---------- formatted logs ---------- */
+  .log-view { padding: 0 !important; white-space: normal; counter-reset: logline; }
+  .log-line { display:grid; grid-template-columns:52px minmax(145px,auto) minmax(0,1fr); gap:12px; min-height:25px; padding:3px 14px; border-bottom:1px solid rgba(255,255,255,.025); font:12px/1.55 var(--mono); }
+  .log-line:hover { background:rgba(255,255,255,.035); }
+  .log-line::before { counter-increment:logline; content:counter(logline); color:var(--muted-2); text-align:right; user-select:none; }
+  .log-time { color:var(--muted); white-space:nowrap; }
+  .log-message { color:var(--body); white-space:pre-wrap; overflow-wrap:anywhere; }
+  .log-line.level-error { background:rgba(239,68,68,.055); }
+  .log-line.level-error .log-message { color:#ff8b8b; }
+  .log-line.level-warn .log-message { color:var(--amber); }
+  .log-line.level-info .log-message { color:var(--body-strong); }
+  .log-line.level-debug { opacity:.68; }
+  .log-line.level-success .log-message { color:var(--emerald); }
+  .log-level { display:inline-block; min-width:48px; margin-right:8px; padding:0 6px; border:1px solid var(--line); border-radius:4px; color:var(--muted); font-size:10px; line-height:17px; text-align:center; text-transform:uppercase; vertical-align:1px; }
+  .level-error .log-level { color:var(--rose); border-color:rgba(239,68,68,.35); }
+  .level-warn .log-level { color:var(--amber); border-color:rgba(245,158,11,.35); }
+  .level-info .log-level { color:var(--blue); border-color:rgba(59,130,246,.35); }
+  .level-success .log-level { color:var(--emerald); border-color:rgba(34,197,94,.35); }
+  .log-empty { display:grid; place-items:center; min-height:280px; color:var(--muted); font-family:var(--sans); }
+
+  /* ---------- installed integration management ---------- */
+  .installed-list { display:flex; flex-direction:column; gap:10px; }
+  .instance-card { width:100%; padding:0; overflow:visible; display:block; }
+  .instance-main { display:grid; grid-template-columns:minmax(240px,1.35fr) minmax(155px,.65fr) minmax(230px,1fr) minmax(150px,.7fr) auto; align-items:center; gap:20px; padding:17px 18px; }
+  .instance-identity { min-width:0; }
+  .instance-titleline { display:flex; align-items:center; gap:9px; min-width:0; }
+  .instance-title { color:var(--ink); font-size:15px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .instance-id { margin-top:4px; color:var(--muted); font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .instance-state { display:flex; align-items:center; gap:8px; font:12px var(--mono); color:var(--body-strong); text-transform:capitalize; }
+  .instance-health { margin-top:6px; font:11px var(--mono); color:var(--muted); }
+  .instance-facts { display:grid; grid-template-columns:repeat(2,minmax(74px,1fr)); gap:6px 14px; }
+  .instance-fact { min-width:0; }
+  .instance-fact b { display:block; color:var(--muted); font:600 9px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.7px; }
+  .instance-fact span { display:block; margin-top:3px; color:var(--body-strong); font:11.5px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .instance-registration { min-width:0; }
+  .instance-registration .reg-badge, .instance-registration .reg-none { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .instance-actions { display:flex; align-items:center; justify-content:flex-end; gap:7px; flex-wrap:nowrap; }
+  .instance-actions .btn { white-space:nowrap; }
+  .instance-alert { display:flex; align-items:center; gap:8px; margin-top:7px; color:var(--rose); font-size:11px; }
+  .instance-update { cursor:pointer; }
+  .instance-card .details { margin:0; border-top:1px solid var(--line); border-radius:0; padding:18px; }
+  @media (max-width:1100px) {
+    .instance-main { grid-template-columns:minmax(240px,1.3fr) minmax(190px,1fr) auto; }
+    .instance-registration { grid-column:1 / 3; }
+  }
+  @media (max-width:760px) {
+    .instance-main { grid-template-columns:1fr; gap:14px; padding:16px; }
+    .instance-registration { grid-column:auto; }
+    .instance-actions { justify-content:flex-start; overflow-x:auto; padding-bottom:2px; }
+    .instance-facts { grid-template-columns:repeat(2,1fr); }
+    .log-line { grid-template-columns:38px 1fr; gap:9px; padding:4px 9px; }
+    .log-time { grid-column:2; font-size:10px; }
+    .log-message { grid-column:2; }
+  }
+
 </style>
 </head>
 <body>
@@ -1045,6 +1101,7 @@ function filteredInstalled() {
 function renderInstalled() {
   const box = $('installedRows');
   box.innerHTML = '';
+  box.className = 'rows installed-list';
   updateOverview();
   const visible = filteredInstalled();
   if (!visible.length) {
@@ -1053,73 +1110,61 @@ function renderInstalled() {
   }
   visible.forEach(it => {
     const running = it.status === 'running';
-    const row = document.createElement('div');
-    row.className = 'row';
+    const row = document.createElement('article');
+    row.className = 'row instance-card';
     const toggle = running
       ? '<button class="btn btn-line btn-sm" onclick="lifecycle(\'' + it.id + '\',\'stop\')">Stop</button>'
       : '<button class="btn btn-primary btn-sm" onclick="lifecycle(\'' + it.id + '\',\'start\')">Start</button>';
     const rc = it.restart_count || 0;
     const looping = (it.status === 'restarting' || it.status === 'exited') && rc >= 3;
-    const statusText = esc(it.status) + (rc ? ' ×' + rc : '');
-    const crashHint = looping
-      ? '<span style="color:var(--red)">crash-looping — check Logs</span>' : '';
-
-    const ver = it.version || 'latest';
     const upd = UPDATES[it.id] || {};
-    const updateBadge = upd.update_available
-      ? '<span class="upd-badge" onclick="openVersion(\'' + it.id + '\')" title="Install the newer version">update ▸ ' +
-        esc(fmtVer(upd.latest_version || '')) + '</span>'
-      : '';
     const regs = REGS[it.id] || [];
-    const regBadge = regs.length
-      ? '<span class="reg-badge" title="Registered on these remotes">◎ ' +
-        esc(regs.map(r => r.remote_name).join(', ')) + '</span>'
-      : '<span class="reg-none">not registered</span>';
-
     const s = STATS[it.id] || {};
-    let statline = '';
-    if (running && s.cpu_pct != null) {
-      statline =
-        '<span>cpu ' + s.cpu_pct + '%</span>' +
-        '<span>mem ' + fmtBytes(s.mem_used) + '</span>' +
-        '<span>up ' + fmtUptime(s.started_at) + '</span>' +
-        (s.health ? '<span style="color:' + healthColor(s.health) + '">● ' + esc(s.health) + '</span>' : '');
-    }
-
     const expanded = EXPANDED.has(it.id);
+    const health = s.health || (running ? 'starting' : 'inactive');
+    const source = (it.source || 'unknown') + (it.stack && it.stack !== 'dockerfile' && it.source !== 'ghcr' ? ' · ' + it.stack : '');
+    const regHtml = regs.length
+      ? '<span class="reg-badge" title="' + esc(regs.map(r => r.remote_name).join(', ')) + '">◎ ' + esc(regs.map(r => r.remote_name).join(', ')) + '</span>'
+      : '<span class="reg-none">not registered</span>';
+    const updateHtml = upd.update_available
+      ? '<span class="upd-badge instance-update" onclick="openVersion(\'' + it.id + '\')">update ▸ ' + esc(fmtVer(upd.latest_version || '')) + '</span>'
+      : (it.auto_update ? '<span class="auto-badge">⟳ auto-update</span>' : '');
+
     row.innerHTML =
-      '<div style="min-width:190px;flex:1">' +
-        '<div class="name">' + esc(it.label || it.name) + '</div>' +
-        '<div class="meta">' +
-          '<span class="status-tag">' + statusLed(it.status) + statusText + '</span>' +
-          '<span>port ' + esc(String(it.port)) + '</span>' +
-          '<span class="src">' + esc(it.source || '') + (it.stack && it.stack !== 'dockerfile' && it.source !== 'ghcr' ? ' · ' + esc(it.stack) : '') + '</span>' +
-          '<span class="ver" title="installed version">' + esc(fmtVer(ver)) + '</span>' +
-          updateBadge +
-          crashHint +
+      '<div class="instance-main">' +
+        '<div class="instance-identity">' +
+          '<div class="instance-titleline">' + statusLed(it.status) + '<span class="instance-title">' + esc(it.label || it.name) + '</span>' + updateHtml + '</div>' +
+          '<div class="instance-id">' + esc(it.id) + (it.driver_id ? ' · ' + esc(it.driver_id) : '') + '</div>' +
+          (looping ? '<div class="instance-alert">● Crash loop detected — inspect logs</div>' : '') +
         '</div>' +
-        '<div class="meta" style="margin-top:4px">' + regBadge +
-          (it.auto_update ? '<span class="auto-badge" title="Auto-updates when a new version is released">⟳ auto-update</span>' : '') +
-          statline + '</div>' +
-      '</div>' +
-      '<div class="row-actions">' + toggle +
-        '<button class="btn btn-line btn-sm" onclick="openLogs(\'' + it.id + '\')">Logs</button>' +
-        '<button class="btn btn-line btn-sm" onclick="registerIntegration(\'' + it.id + '\')" title="Register on the active remote">Register</button>' +
-        '<button class="btn btn-line btn-sm' + (expanded ? ' det-open' : '') + '" onclick="toggleDetails(\'' + it.id + '\')">Details</button>' +
-        '<div class="menu-wrap">' +
-          '<button class="btn btn-line btn-sm" onclick="toggleMenu(event,\'' + it.id + '\')">More ▾</button>' +
-          '<div class="menu" id="menu-' + it.id + '">' +
-            '<button onclick="lifecycle(\'' + it.id + '\',\'restart\')">Restart</button>' +
-            '<button onclick="openVersion(\'' + it.id + '\')">Change version</button>' +
-            '<button onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
-            '<button onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
-            '<button onclick="toggleAutoUpdate(\'' + it.id + '\')">Auto-update: ' + (it.auto_update ? 'on' : 'off') + '</button>' +
-            '<div class="menu-sep"></div>' +
-            '<button onclick="backupInstance(\'' + it.id + '\')">Backup config</button>' +
-            '<button onclick="restoreInstance(\'' + it.id + '\')">Restore config…</button>' +
-            '<div class="menu-sep"></div>' +
-            '<button class="danger" onclick="removeIntegration(\'' + it.id + '\')">Remove</button>' +
-          '</div>' +
+        '<div>' +
+          '<div class="instance-state">' + esc(it.status) + (rc ? ' · ' + rc + ' restarts' : '') + '</div>' +
+          '<div class="instance-health" style="color:' + healthColor(health) + '">● ' + esc(health) + (s.started_at ? ' · up ' + fmtUptime(s.started_at) : '') + '</div>' +
+        '</div>' +
+        '<div class="instance-facts">' +
+          '<div class="instance-fact"><b>Version</b><span>' + esc(fmtVer(it.version || 'latest')) + '</span></div>' +
+          '<div class="instance-fact"><b>Port</b><span>' + esc(String(it.port)) + '</span></div>' +
+          '<div class="instance-fact"><b>CPU</b><span>' + (s.cpu_pct != null ? esc(String(s.cpu_pct)) + '%' : '—') + '</span></div>' +
+          '<div class="instance-fact"><b>Memory</b><span>' + (s.mem_used != null ? fmtBytes(s.mem_used) : '—') + '</span></div>' +
+          '<div class="instance-fact"><b>Source</b><span title="' + esc(source) + '">' + esc(source) + '</span></div>' +
+          '<div class="instance-fact"><b>Auto update</b><span>' + (it.auto_update ? 'enabled' : 'disabled') + '</span></div>' +
+        '</div>' +
+        '<div class="instance-registration">' + regHtml + '</div>' +
+        '<div class="instance-actions">' + toggle +
+          '<button class="btn btn-line btn-sm" onclick="openLogs(\'' + it.id + '\')">Logs</button>' +
+          '<button class="btn btn-line btn-sm" onclick="registerIntegration(\'' + it.id + '\')">Register</button>' +
+          '<button class="btn btn-line btn-sm' + (expanded ? ' det-open' : '') + '" onclick="toggleDetails(\'' + it.id + '\')">' + (expanded ? 'Hide' : 'Details') + '</button>' +
+          '<div class="menu-wrap"><button class="btn btn-line btn-sm" onclick="toggleMenu(event,\'' + it.id + '\')">More ▾</button>' +
+            '<div class="menu" id="menu-' + it.id + '">' +
+              '<button onclick="lifecycle(\'' + it.id + '\',\'restart\')">Restart</button>' +
+              '<button onclick="openVersion(\'' + it.id + '\')">Change version</button>' +
+              '<button onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
+              '<button onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
+              '<button onclick="toggleAutoUpdate(\'' + it.id + '\')">Auto-update: ' + (it.auto_update ? 'on' : 'off') + '</button>' +
+              '<div class="menu-sep"></div><button onclick="backupInstance(\'' + it.id + '\')">Backup config</button>' +
+              '<button onclick="restoreInstance(\'' + it.id + '\')">Restore config…</button>' +
+              '<div class="menu-sep"></div><button class="danger" onclick="removeIntegration(\'' + it.id + '\')">Remove</button>' +
+            '</div></div>' +
         '</div>' +
       '</div>' +
       (expanded ? '<div class="details">' + detailsHtml(it) + '</div>' : '');
@@ -1306,7 +1351,7 @@ async function openLogs(id) {
   logTarget = id;
   document.querySelector('#logBack h2').textContent = 'Logs';
   $('logSub').textContent = id;
-  $('logConsole').textContent = 'Loading…';
+  $('logConsole').classList.remove('log-view'); $('logConsole').textContent = 'Loading…';
   showWorkspacePanel('logBack');
   refreshLogs();
 }
@@ -1316,9 +1361,54 @@ async function openInstallerLogs() {
   logInstaller = true; logTarget = null;
   document.querySelector('#logBack h2').textContent = 'Installer logs';
   $('logSub').textContent = 'systemd journal';
-  $('logConsole').textContent = 'Loading…';
+  $('logConsole').classList.remove('log-view'); $('logConsole').textContent = 'Loading…';
   showWorkspacePanel('logBack');
   refreshLogs();
+}
+function classifyLogLine(line) {
+  const value = String(line || '');
+  if (/\b(error|fatal|panic|failed|failure|exception|traceback)\b/i.test(value)) return ['error', 'error'];
+  if (/\b(warn|warning|deprecated)\b/i.test(value)) return ['warn', 'warn'];
+  if (/\b(debug|trace)\b/i.test(value)) return ['debug', 'debug'];
+  if (/\b(success|successful|started|ready|healthy|complete[d]?)\b/i.test(value)) return ['success', 'ok'];
+  if (/\b(info|notice)\b/i.test(value)) return ['info', 'info'];
+  return ['', ''];
+}
+function splitLogLine(line) {
+  const patterns = [
+    /^(\d{4}-\d{2}-\d{2}[T ][0-9:.+-]+Z?)\s+(.*)$/,
+    /^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(.*)$/,
+    /^(\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+(.*)$/
+  ];
+  for (const pattern of patterns) {
+    const match = String(line || '').match(pattern);
+    if (match) return { time: match[1], message: match[2] };
+  }
+  return { time: '', message: String(line || '') };
+}
+function logLineHtml(line) {
+  const parsed = splitLogLine(line);
+  const [levelClass, levelLabel] = classifyLogLine(parsed.message);
+  return '<div class="log-line' + (levelClass ? ' level-' + levelClass : '') + '">' +
+    '<span class="log-time">' + esc(parsed.time) + '</span>' +
+    '<span class="log-message">' + (levelLabel ? '<span class="log-level">' + levelLabel + '</span>' : '') + esc(parsed.message || ' ') + '</span></div>';
+}
+function renderLogs(logs) {
+  const c = $('logConsole');
+  c.classList.add('log-view');
+  const lines = String(logs || '').replace(/\r/g, '').split('\n');
+  if (!logs || (lines.length === 1 && !lines[0])) {
+    c.innerHTML = '<div class="log-empty">No log output yet</div>';
+    return;
+  }
+  c.innerHTML = lines.map(logLineHtml).join('');
+}
+function appendLogLine(line) {
+  const c = $('logConsole');
+  c.classList.add('log-view');
+  const empty = c.querySelector('.log-empty');
+  if (empty) empty.remove();
+  c.insertAdjacentHTML('beforeend', logLineHtml(line));
 }
 async function refreshLogs() {
   const c = $('logConsole');
@@ -1330,9 +1420,9 @@ async function refreshLogs() {
       if (!logTarget) return;
       logs = (await api('/api/instances/' + logTarget + '/logs?tail=400')).logs;
     }
-    c.textContent = logs || '(no output yet)';
+    renderLogs(logs);
     scrollLogsToLatest(true);
-  } catch (e) { c.textContent = e.message; }
+  } catch (e) { renderLogs('ERROR ' + e.message); }
 }
 
 // ---- misc ----
@@ -1700,7 +1790,7 @@ function toggleFollow() {
   const url = logInstaller ? ('/api/installer/logs/stream' + t) : ('/api/instances/' + logTarget + '/logs/stream' + t);
   logSource = new EventSource(url);
   const c = $('logConsole');
-  logSource.onmessage = (e) => { c.textContent += (c.textContent ? '\n' : '') + e.data; scrollLogsToLatest(); };
+  logSource.onmessage = (e) => { appendLogLine(e.data); scrollLogsToLatest(); };
   logSource.onerror = () => {};
   $('logFollowBtn').textContent = 'Following…'; $('logFollowBtn').classList.add('det-open');
 }
