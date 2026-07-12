@@ -1368,7 +1368,7 @@ function setHash(route,replace=false){ const h='#/'+route; if(location.hash!==h)
 const _switchTab=switchTab; switchTab=function(t){ _switchTab(t); setHash(t); };
 const _showWorkspacePanel=showWorkspacePanel; showWorkspacePanel=function(id){ _showWorkspacePanel(id); setHash(routeForPanel(id)); };
 const _hideWorkspacePanel=hideWorkspacePanel; hideWorkspacePanel=function(id){ _hideWorkspacePanel(id); setHash(TAB||'browse'); };
-function applyRoute(){ const r=(location.hash||'#/installed').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='health'){openHealth();return;} if(r==='settings'){openMaint();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
+function applyRoute(){ const r=(location.hash||'#/installed').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='health'){openHealth();return;} if(r==='diagnostics'){openDiagnostics();return;} if(r==='settings'){openMaint();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
 window.addEventListener('popstate',applyRoute);
 
 const OPERATION_TTL = { success: 12000, failed: 30000 };

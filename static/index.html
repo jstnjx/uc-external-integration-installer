@@ -5,12 +5,12 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>UC External Integration Installer</title>
-<link rel="icon" href="/static/favicon.svg?v=5.7.0" type="image/svg+xml"/>
+<link rel="icon" href="/static/favicon.svg?v=5.8.0" type="image/svg+xml"/>
 <link href="https://fonts.googleapis.com" rel="preconnect"/>
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..24,100,0,0" rel="stylesheet"/>
-<link rel="stylesheet" href="/static/styles.css?v=5.7.0">
+<link rel="stylesheet" href="/static/styles.css?v=5.8.0">
 </head>
 <body>
 <header class="bar">
@@ -61,10 +61,10 @@
 </section>
 <div class="workspace-nav">
 <div class="tabs">
-<button class="tab" id="tabBrowseBtn" onclick="switchTab('browse')">Browse
-        <span class="count" id="browseCount"></span></button>
 <button class="tab active" id="tabInstalledBtn" onclick="switchTab('installed')">Installed
         <span class="count" id="installedCount"></span></button>
+<button class="tab" id="tabBrowseBtn" onclick="switchTab('browse')">Browse
+        <span class="count" id="browseCount"></span></button>
 </div>
 <div class="workspace-hint" id="workspaceHint">Operate containers, versions, registration, and runtime health.</div>
 </div>
@@ -380,16 +380,16 @@
 <aside class="operation-drawer hidden" id="operationDrawer" aria-label="Operations"><button class="operation-head" onclick="toggleOperationDrawer()" aria-expanded="false"><span>Operations</span><span id="operationSummary">No active operations</span><b class="operation-chevron" id="operationChevron"><span class="material-symbols-outlined" aria-hidden="true">expand_more</span></b></button><div class="operation-list" id="operationList"></div></aside>
 <button class="back-to-top" id="backToTop" type="button" aria-label="Back to top" title="Back to top" onclick="scrollToTop()"><span class="material-symbols-outlined" aria-hidden="true">arrow_upward</span></button>
 <div id="toasts"></div>
-<script src="/static/api.js?v=5.7.0"></script>
-<script src="/static/app.js?v=5.7.0"></script>
-<script src="/static/navigation.js?v=5.7.0"></script>
-<script src="/static/dialogs.js?v=5.7.0"></script>
-<script src="/static/logs.js?v=5.7.0"></script>
-<script src="/static/installed.js?v=5.7.0"></script>
-<script src="/static/remotes.js?v=5.7.0"></script>
-<script src="/static/settings.js?v=5.7.0"></script>
-<script src="/static/operations.js?v=5.7.0"></script>
-<script src="/static/enhancements.js?v=5.7.0"></script>
-<script src="/static/health.js?v=5.7.0"></script>
+<script src="/static/api.js?v=5.8.0"></script>
+<script src="/static/app.js?v=5.8.0"></script>
+<script src="/static/navigation.js?v=5.8.0"></script>
+<script src="/static/dialogs.js?v=5.8.0"></script>
+<script src="/static/logs.js?v=5.8.0"></script>
+<script src="/static/installed.js?v=5.8.0"></script>
+<script src="/static/remotes.js?v=5.8.0"></script>
+<script src="/static/settings.js?v=5.8.0"></script>
+<script src="/static/operations.js?v=5.8.0"></script>
+<script src="/static/enhancements.js?v=5.8.0"></script>
+<script src="/static/health.js?v=5.8.0"></script>
 </body>
 </html>
