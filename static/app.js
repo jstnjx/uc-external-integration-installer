@@ -1326,7 +1326,7 @@ function renderInstalled(){
   const box=$('installedRows'); box.innerHTML=''; box.className='rows installed-list'; updateOverview(); const visible=filteredInstalled();
   if(!visible.length){ box.innerHTML='<div class="empty"><h3>'+(INSTALLED.length?'No matching instances':'No integrations installed')+'</h3><p>'+(INSTALLED.length?'Adjust the active filters.':'Browse the registry to install your first integration.')+'</p>'+(INSTALLED.length?'':'<button class="btn btn-primary" onclick="switchTab(\'browse\')">Browse integrations</button>')+'</div>'; updateBulkBar(); return; }
   visible.forEach(it=>{ const running=it.status==='running', rc=it.restart_count||0, upd=UPDATES[it.id]||{}, regs=REGS[it.id]||[], st=STATS[it.id]||{}, health=st.health||it.health||(running?'starting':'unknown'), expanded=EXPANDED.has(it.id), selected=SELECTED_INSTALLED.has(it.id), looping=(it.status==='restarting'||it.status==='exited')&&rc>=3;
-    const row=document.createElement('article'); row.className='row integration-row'+(selected?' selected':''); row.tabIndex=0; row.setAttribute('aria-selected',selected?'true':'false'); row.setAttribute('role','option'); row.onclick=e=>handleInstalledRowClick(e,it.id); row.onkeydown=e=>handleInstalledRowKey(e,it.id);
+    const row=document.createElement('article'); row.className='row integration-row'+(selected?' selected':''); row.tabIndex=0; row.setAttribute('aria-selected',selected?'true':'false'); row.setAttribute('role','option'); row.dataset.instanceId=it.id; row.onclick=e=>handleInstalledRowClick(e,it.id); row.onkeydown=e=>handleInstalledRowKey(e,it.id);
     row.innerHTML='<div class="integration-row-main"><div class="integration-row-state '+stateRailClass(it.status)+'" title="Container: '+esc(it.status)+'"></div><div class="integration-row-content"><div class="integration-row-head"><span class="integration-row-title">'+esc(it.label||it.name)+'</span><span class="integration-title-actions">'+
       '<button class="row-icon-btn" title="Stop integration" aria-label="Stop '+esc(it.label||it.name)+'" '+(!running?'disabled':'')+' onclick="lifecycle(\''+it.id+'\',\'stop\')">■</button>'+
       '<button class="row-icon-btn" title="Restart integration" aria-label="Restart '+esc(it.label||it.name)+'" onclick="lifecycle(\''+it.id+'\',\'restart\')">↻</button>'+
@@ -1339,12 +1339,12 @@ function renderInstalled(){
 }
 async function setAutoUpdate(id,enabled){ try{await api('/api/instances/'+id+'/auto-update',{method:'POST',body:JSON.stringify({enabled})}); const it=INSTALLED.find(x=>x.id===id); if(it)it.auto_update=enabled; toast('Auto-update '+(enabled?'enabled':'disabled'),'ok');}catch(e){toast(e.message,'bad');loadInstalled();} }
 
-function routeForPanel(id){ return {remBack:'remotes',logBack:logInstaller?'installer-logs':'logs/'+(logTarget||''),actBack:'activity',maintBack:'settings',updBack:'update',cfgBack:'configure/'+(cfgTarget||''),jobBack:'operations',setupBack:'setup'}[id]||'installed'; }
+function routeForPanel(id){ return {remBack:'remotes',logBack:logInstaller?'installer-logs':'logs/'+(logTarget||''),actBack:'activity',healthBack:'health',maintBack:'settings',updBack:'update',cfgBack:'configure/'+(cfgTarget||''),jobBack:'operations',setupBack:'setup'}[id]||'installed'; }
 function setHash(route,replace=false){ const h='#/'+route; if(location.hash!==h) history[replace?'replaceState':'pushState']({},'',h); }
 const _switchTab=switchTab; switchTab=function(t){ _switchTab(t); setHash(t); };
 const _showWorkspacePanel=showWorkspacePanel; showWorkspacePanel=function(id){ _showWorkspacePanel(id); setHash(routeForPanel(id)); };
 const _hideWorkspacePanel=hideWorkspacePanel; hideWorkspacePanel=function(id){ _hideWorkspacePanel(id); setHash(TAB||'browse'); };
-function applyRoute(){ const r=(location.hash||'#/browse').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='settings'){openMaint();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
+function applyRoute(){ const r=(location.hash||'#/browse').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='health'){openHealth();return;} if(r==='settings'){openMaint();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
 window.addEventListener('popstate',applyRoute);
 
 const OPERATION_TTL = { success: 12000, failed: 30000 };

@@ -1,9 +1,6 @@
 
   /* ============================================================
-     UC External Integration Installer — ClickHouse-inspired system
-     Near-black canvas · electric yellow used scarcely as voltage ·
-     Inter for UI, JetBrains Mono for data · flat surfaces, hairlines,
-     no drop shadows · semantic emerald/rose/amber for status only.
+     UC External Integration Installer
      ============================================================ */
   :root {
     --yellow: #faff69;
@@ -768,3 +765,71 @@
 .workspace-panel-head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:18px}.workspace-panel-head h2{margin:4px 0;color:var(--ink)}
 .integration-row[aria-busy="true"]{opacity:.7;pointer-events:none}.integration-row-chevron{min-width:44px;min-height:56px}
 @media(max-width:760px){.integration-row-head{padding-right:34px;align-items:flex-start}.integration-title-actions{display:flex;flex-wrap:wrap}.register-menu{position:fixed!important;left:12px!important;right:12px!important;top:auto!important;bottom:76px!important;max-height:55vh;overflow:auto}.bulk-bar{position:sticky;bottom:8px;z-index:18;overflow-x:auto;flex-wrap:nowrap}.operation-drawer{left:8px!important;right:8px!important;width:auto!important;max-height:78vh}.settings-tabs{overflow-x:auto;white-space:nowrap;scrollbar-width:thin}.driver-manage-row{align-items:flex-start;flex-direction:column}.driver-manage-row>div:last-child{width:100%}.driver-manage-row .btn{flex:1}.workspace-panel-head{align-items:flex-start}.restart-banner{align-items:flex-start;flex-direction:column}}
+
+/* ---------- comprehensive health page ---------- */
+.health-page { width:100%; }
+.health-page-head { align-items:center; }
+.health-head-actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; justify-content:flex-end; }
+.health-updated { color:var(--muted); font:12px var(--mono); margin-right:4px; }
+.health-auto { display:flex; align-items:center; gap:7px; color:var(--body); font-size:12.5px; cursor:pointer; }
+.health-auto input { accent-color:var(--yellow); }
+.health-body { padding:0 !important; }
+.health-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; width:100%; }
+.health-card { min-width:0; background:var(--soft); border:1px solid var(--line); border-radius:var(--r-lg); padding:20px; }
+.health-card-wide,.health-card-full { grid-column:1/-1; }
+.health-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding-bottom:16px; margin-bottom:16px; border-bottom:1px solid var(--line); }
+.health-card-head h3 { color:var(--ink); font-size:17px; letter-spacing:-.3px; margin:0 0 3px; }
+.health-card-head p { margin:0; color:var(--muted); font-size:12.5px; }
+.health-status { display:inline-flex; align-items:center; gap:7px; flex:none; color:var(--muted); font:11.5px var(--mono); text-transform:lowercase; }
+.health-status > span { width:8px; height:8px; border-radius:50%; background:var(--muted-2); }
+.health-status.good { color:var(--emerald); }.health-status.good > span { background:var(--emerald); }
+.health-status.warn { color:var(--amber); }.health-status.warn > span { background:var(--amber); }
+.health-status.bad { color:var(--rose); }.health-status.bad > span { background:var(--rose); }
+.health-primary-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.health-gauge { padding:14px; background:var(--card); border:1px solid var(--line); border-radius:var(--r-md); }
+.health-gauge > div:first-child { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.health-gauge strong { color:var(--ink); font:700 23px var(--mono); }
+.health-gauge span { color:var(--muted); font-size:10px; letter-spacing:.7px; text-transform:uppercase; }
+.health-gauge small { display:block; color:var(--muted); font:11px var(--mono); margin-top:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.health-meter { height:5px; overflow:hidden; margin-top:10px; background:var(--elev); border-radius:var(--pill); }
+.health-meter i { display:block; height:100%; border-radius:inherit; background:var(--yellow); transition:width .35s var(--ease); }
+.health-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1px; overflow:hidden; margin-top:14px; background:var(--line); border:1px solid var(--line); border-radius:var(--r-md); }
+.health-metric { min-width:0; padding:12px 14px; background:var(--card); }
+.health-metric > span { display:block; color:var(--muted); font-size:10px; letter-spacing:.65px; text-transform:uppercase; }
+.health-metric strong { display:block; color:var(--ink); font:600 13px var(--mono); margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.health-metric small { display:block; color:var(--muted); font:10.5px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.health-docker-summary,.health-installer-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.health-table-wrap { overflow:auto; margin-top:16px; border:1px solid var(--line); border-radius:var(--r-md); }
+.health-table { width:100%; border-collapse:collapse; min-width:760px; }
+.health-table th { padding:10px 12px; color:var(--muted); background:var(--card); border-bottom:1px solid var(--line); font-size:10px; text-align:left; text-transform:uppercase; letter-spacing:.6px; }
+.health-table td { padding:11px 12px; border-bottom:1px solid var(--line); color:var(--body); font-size:12px; }
+.health-table tr:last-child td { border-bottom:0; }
+.health-table td:first-child small { display:block; color:var(--muted); font:10.5px var(--mono); }
+.health-link { appearance:none; border:0; padding:0; background:none; color:var(--ink); font:600 12.5px var(--sans); cursor:pointer; }
+.health-link:hover { color:var(--yellow); }
+.health-remote-list { display:flex; flex-direction:column; gap:8px; }
+.health-remote-row { display:grid; grid-template-columns:minmax(220px,1fr) 120px 90px 80px 120px auto; align-items:center; gap:14px; padding:13px 14px; background:var(--card); border:1px solid var(--line); border-radius:var(--r-md); }
+.health-remote-main { min-width:0; }
+.health-remote-main strong { color:var(--ink); margin-right:7px; }
+.health-remote-main small { display:block; overflow:hidden; color:var(--muted); font:11px var(--mono); text-overflow:ellipsis; white-space:nowrap; }
+.health-remote-stat strong,.health-remote-stat span { display:block; }
+.health-remote-stat strong { color:var(--body-strong); font:600 12px var(--mono); }
+.health-remote-stat span { color:var(--muted); font-size:9.5px; letter-spacing:.5px; text-transform:uppercase; }
+.health-empty { padding:28px; color:var(--muted); text-align:center; }
+@media(max-width:900px){
+  .health-primary-grid { grid-template-columns:1fr; }
+  .health-metrics,.health-docker-summary,.health-installer-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .health-remote-row { grid-template-columns:minmax(180px,1fr) auto auto; }
+  .health-remote-row .health-remote-stat:nth-of-type(3),.health-remote-row .health-remote-stat:nth-of-type(4) { display:none; }
+}
+@media(max-width:640px){
+  .health-page-head { align-items:flex-start; }
+  .health-head-actions { width:100%; justify-content:flex-start; }
+  .health-updated { width:100%; }
+  .health-card { padding:14px; }
+  .health-metrics,.health-docker-summary,.health-installer-grid { grid-template-columns:1fr 1fr; }
+  .health-remote-row { grid-template-columns:1fr auto; }
+  .health-remote-row > .health-status { grid-column:2; grid-row:1; }
+  .health-remote-row .health-remote-stat { display:none; }
+  .health-remote-row .btn { grid-column:1/-1; width:100%; }
+}

@@ -92,6 +92,10 @@ HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
 APP_DIR = HERE  # the installed code directory / git checkout root
 
+PROCESS_STARTED_AT = time.time()
+_host_cpu_lock = threading.Lock()
+_host_cpu_sample: tuple[int, int] | None = None
+
 
 def _resolve_data_dir() -> Path:
     candidate = Path(os.environ.get("UC_INSTALLER_DATA", "/var/lib/uc-external-integration-installer"))
@@ -2515,6 +2519,198 @@ def api_remotes_unregister(rid: str, driver_id: str) -> dict[str, str]:
         record_event("register", None, f"unregistered {driver_id} from {remote.get('name', rid)}")
         return {"status": "unregistered", "driver_id": driver_id}
     raise HTTPException(502, f"Remote returned {r.status_code}")
+
+
+# ---- comprehensive health overview ------------------------------------------
+
+
+def _read_proc_stat_cpu() -> tuple[int, int] | None:
+    try:
+        fields = Path("/proc/stat").read_text().splitlines()[0].split()[1:]
+        values = [int(v) for v in fields]
+        idle = values[3] + (values[4] if len(values) > 4 else 0)
+        return sum(values), idle
+    except Exception:
+        return None
+
+
+def _host_cpu_percent() -> float | None:
+    global _host_cpu_sample
+    current = _read_proc_stat_cpu()
+    if current is None:
+        return None
+    with _host_cpu_lock:
+        previous = _host_cpu_sample
+        _host_cpu_sample = current
+    if previous is None:
+        return None
+    total_delta = current[0] - previous[0]
+    idle_delta = current[1] - previous[1]
+    if total_delta <= 0:
+        return None
+    return round(max(0.0, min(100.0, (1.0 - idle_delta / total_delta) * 100.0)), 1)
+
+
+def _host_memory() -> dict[str, Any]:
+    out: dict[str, int] = {}
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, value = line.split(":", 1)
+            out[key] = int(value.strip().split()[0]) * 1024
+    except Exception:
+        pass
+    total = out.get("MemTotal", 0)
+    available = out.get("MemAvailable", out.get("MemFree", 0))
+    used = max(0, total - available)
+    swap_total = out.get("SwapTotal", 0)
+    swap_free = out.get("SwapFree", 0)
+    return {
+        "total": total, "used": used, "available": available,
+        "percent": round(used / total * 100.0, 1) if total else None,
+        "swap_total": swap_total, "swap_used": max(0, swap_total - swap_free),
+    }
+
+
+def _host_uptime() -> float | None:
+    try:
+        return float(Path("/proc/uptime").read_text().split()[0])
+    except Exception:
+        return None
+
+
+def _process_memory() -> int | None:
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return None
+
+
+def _managed_docker_health() -> dict[str, Any]:
+    records = load_state().get("integrations", {})
+    cached = api_stats() if docker_available() else {}
+    containers: list[dict[str, Any]] = []
+    totals = {"cpu_pct": 0.0, "mem_used": 0, "mem_limit": 0, "pids": 0, "restarts": 0}
+    states: dict[str, int] = {}
+    healthy = unhealthy = unknown = 0
+    for iid, rec in records.items():
+        stat = cached.get(iid, {})
+        status = stat.get("status") or rec.get("status") or "unknown"
+        health_state = stat.get("health") or ("unknown" if status == "running" else "not-running")
+        states[status] = states.get(status, 0) + 1
+        if health_state in ("healthy", "responding"):
+            healthy += 1
+        elif health_state in ("unhealthy", "unreachable"):
+            unhealthy += 1
+        else:
+            unknown += 1
+        cpu = float(stat.get("cpu_pct") or 0)
+        mem = int(stat.get("mem_used") or 0)
+        limit = int(stat.get("mem_limit") or 0)
+        pids = int(stat.get("pids") or 0)
+        restarts = int(stat.get("restart_count") or rec.get("restart_count") or 0)
+        totals["cpu_pct"] += cpu; totals["mem_used"] += mem; totals["mem_limit"] += limit
+        totals["pids"] += pids; totals["restarts"] += restarts
+        containers.append({
+            "id": iid, "name": rec.get("label") or rec.get("name") or iid,
+            "status": status, "health": health_state, "cpu_pct": cpu,
+            "mem_used": mem, "mem_limit": limit, "pids": pids,
+            "restarts": restarts, "port": rec.get("port"),
+            "started_at": stat.get("started_at"),
+        })
+    totals["cpu_pct"] = round(totals["cpu_pct"], 1)
+    return {
+        "available": docker_available(), "managed_count": len(records),
+        "states": states, "healthy": healthy, "unhealthy": unhealthy, "unknown": unknown,
+        "totals": totals, "containers": containers,
+    }
+
+
+def _remote_health_overview() -> list[dict[str, Any]]:
+    remote_data = load_remotes()
+    items = list(remote_data.get("remotes", {}).items())
+    active = remote_data.get("active")
+    if not items:
+        return []
+
+    def check(item: tuple[str, dict[str, Any]]) -> dict[str, Any]:
+        rid, remote = item
+        started = time.perf_counter()
+        reachable = False; status_code = None; drivers = 0; error = None
+        try:
+            response = remote_request(remote, "GET", "/intg/drivers?limit=100&page=1", timeout=3.0)
+            status_code = response.status_code
+            reachable = response.status_code < 400
+            if reachable:
+                try:
+                    drivers = int(response.headers.get("Pagination-Count", len(response.json() or [])))
+                except Exception:
+                    drivers = 0
+        except Exception as exc:
+            error = str(exc)
+        latency = round((time.perf_counter() - started) * 1000)
+        return {
+            "id": rid, "name": remote.get("name") or rid,
+            "address": f"{remote.get('scheme', 'http')}://{remote.get('host')}:{remote.get('port')}",
+            "reachable": reachable, "latency_ms": latency, "status_code": status_code,
+            "drivers": drivers, "active": rid == active,
+            "auth": "API key" if remote.get("api_key") else "PIN",
+            "error": error,
+        }
+
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=min(8, len(items))) as executor:
+        return list(executor.map(check, items))
+
+
+@app.get("/api/health/overview", dependencies=[Depends(require_token)])
+def api_health_overview() -> dict[str, Any]:
+    disk = shutil.disk_usage(DATA_DIR)
+    try:
+        load1, load5, load15 = os.getloadavg()
+    except (AttributeError, OSError):
+        load1 = load5 = load15 = None
+    registry_ok = True
+    registry_version = None
+    try:
+        registry = fetch_registry()
+        registry_version = registry.get("version")
+    except Exception:
+        registry_ok = False
+    docker = _managed_docker_health()
+    remotes = _remote_health_overview()
+    uptime = max(0.0, time.time() - PROCESS_STARTED_AT)
+    installer_mem = _process_memory()
+    running_jobs = sum(1 for j in JOBS.values() if j.status == "running")
+    failed_jobs = sum(1 for j in JOBS.values() if j.status == "failed")
+    recent_errors = len([e for e in load_events(100) if e.get("kind") == "error"])
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "host": {
+            "hostname": socket.gethostname(), "platform": platform.platform(),
+            "architecture": platform.machine(), "cpu_count": os.cpu_count(),
+            "cpu_pct": _host_cpu_percent(), "load": [load1, load5, load15],
+            "memory": _host_memory(), "uptime_seconds": _host_uptime(),
+            "disk": {"path": str(DATA_DIR), "total": disk.total, "used": disk.used, "free": disk.free,
+                     "percent": round(disk.used / disk.total * 100.0, 1) if disk.total else None},
+        },
+        "docker": docker,
+        "remotes": remotes,
+        "installer": {
+            "status": "healthy" if docker.get("available") and registry_ok else "degraded",
+            "version": app.version, "build": current_commit().get("short"),
+            "uptime_seconds": uptime, "memory_rss": installer_mem,
+            "threads": threading.active_count(), "active_jobs": running_jobs,
+            "failed_jobs": failed_jobs, "recent_errors": recent_errors,
+            "registry_ok": registry_ok, "registry_version": registry_version,
+            "registry_commit": registry_commit(), "health_probe": health_probe_on(),
+            "token_required": bool(token_val()), "service_unit": service_unit_val(),
+            "bind": f"{os.environ.get('UC_INSTALLER_HOST', '0.0.0.0')}:{os.environ.get('UC_INSTALLER_PORT', '8900')}",
+            "data_dir": str(DATA_DIR),
+        },
+    }
 
 
 # ---- diagnostics, settings portability, registration preflight --------------
