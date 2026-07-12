@@ -2591,38 +2591,86 @@ async def api_instance_restore(instance_id: str, file: UploadFile = File(...)) -
     return {"status": "restored", "note": "Restart or rebuild the instance to apply."}
 
 
+
+class ReconcileOptions(BaseModel):
+    adopt: bool = True
+    remove_stale: bool = False
+    restart_stopped: bool = False
+
+
+class PruneOptions(BaseModel):
+    unused_local: bool = True
+    dangling: bool = True
+    build_cache: bool = False
+
 @app.post("/api/maintenance/prune", dependencies=[Depends(require_token)])
-def api_prune() -> dict[str, Any]:
+def api_prune(options: PruneOptions | None = None) -> dict[str, Any]:
+    options = options or PruneOptions()
     if not docker_available():
         raise HTTPException(503, "Docker is not available")
     client = get_docker()
     in_use = {rec.get("image") for rec in load_state()["integrations"].values()}
-    removed = []
-    try:
-        for img in client.images.list():
-            tags = img.tags or []
-            local = [t for t in tags if t.startswith("uc-local/")]
-            if local and not any(t in in_use for t in tags):
-                try:
-                    client.images.remove(img.id, force=True)
-                    removed.extend(local)
-                except Exception:  # noqa: BLE001
-                    pass
-    except Exception:  # noqa: BLE001
-        pass
+    removed: list[str] = []
     reclaimed = 0
-    try:
-        reclaimed = (client.images.prune(filters={"dangling": True}) or {}).get("SpaceReclaimed", 0)
-    except Exception:  # noqa: BLE001
-        pass
-    record_event("state", None, f"pruned {len(removed)} build image(s)")
+    if options.unused_local:
+        try:
+            for img in client.images.list():
+                tags = img.tags or []
+                local = [t for t in tags if t.startswith("uc-local/")]
+                if local and not any(t in in_use for t in tags):
+                    try:
+                        client.images.remove(img.id, force=True)
+                        removed.extend(local)
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001
+            pass
+    if options.dangling:
+        try:
+            reclaimed += int((client.images.prune(filters={"dangling": True}) or {}).get("SpaceReclaimed", 0))
+        except Exception:  # noqa: BLE001
+            pass
+    if options.build_cache:
+        try:
+            reclaimed += int((client.api.prune_builds() or {}).get("SpaceReclaimed", 0))
+        except Exception:  # noqa: BLE001
+            pass
+    record_event("state", None, f"pruned {len(removed)} build image(s), reclaimed {reclaimed} bytes")
     return {"removed": removed, "space_reclaimed": reclaimed}
 
 
 @app.post("/api/maintenance/reconcile", dependencies=[Depends(require_token)])
-def api_reconcile() -> dict[str, Any]:
-    reconcile_state()
-    return {"status": "ok"}
+def api_reconcile(options: ReconcileOptions | None = None) -> dict[str, Any]:
+    options = options or ReconcileOptions()
+    before = set(load_state()["integrations"])
+    if options.adopt:
+        reconcile_state()
+    state = load_state()
+    adopted = len(set(state["integrations"]) - before)
+    stale_removed = 0
+    started = 0
+    try:
+        client = get_docker()
+        existing = {c.name: c for c in client.containers.list(all=True, filters={"label": f"{LABEL_MANAGED}=managed"})}
+        if options.remove_stale:
+            for iid in list(state["integrations"]):
+                if iid not in existing:
+                    state["integrations"].pop(iid, None)
+                    stale_removed += 1
+            if stale_removed:
+                save_state(state)
+        if options.restart_stopped:
+            for iid, container in existing.items():
+                if iid in state["integrations"] and container.status != "running":
+                    try:
+                        container.start()
+                        started += 1
+                    except Exception:  # noqa: BLE001
+                        pass
+    except Exception:  # noqa: BLE001
+        pass
+    record_event("state", None, f"reconciled containers: {adopted} adopted, {stale_removed} stale removed, {started} started")
+    return {"status": "ok", "adopted": adopted, "stale_removed": stale_removed, "started": started}
 
 
 @app.get("/api/installer/logs", dependencies=[Depends(require_token)])

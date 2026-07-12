@@ -608,10 +608,21 @@ function splitLogLine(line) {
   }
   return { time: '', message: String(line || '') };
 }
+function parseLogTimestamp(raw) {
+  if (!raw) return null;
+  let ts = Date.parse(raw);
+  if (!Number.isNaN(ts)) return ts;
+  const m = raw.match(/^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  if (m) { const months={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11}; const now=new Date(); const d=new Date(now.getFullYear(),months[m[1]],Number(m[2]),Number(m[3]),Number(m[4]),Number(m[5])); if(d.getTime()>now.getTime()+86400000)d.setFullYear(d.getFullYear()-1); return d.getTime(); }
+  const t = raw.match(/^(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/);
+  if (t) { const n=new Date(); n.setHours(Number(t[1]),Number(t[2]),Number(t[3]),0); return n.getTime(); }
+  return null;
+}
 function logLineHtml(line) {
   const parsed = splitLogLine(line);
   const [levelClass, levelLabel] = classifyLogLine(parsed.message);
-  return '<div class="log-line' + (levelClass ? ' level-' + levelClass : '') + '" data-level="' + (levelClass || 'other') + '" data-search="' + esc(String(line || '').toLowerCase()) + '">' +
+  const timestamp=parseLogTimestamp(parsed.time);
+  return '<div class="log-line' + (levelClass ? ' level-' + levelClass : '') + '" data-level="' + (levelClass || 'other') + '" data-ts="' + (timestamp||'') + '" data-search="' + esc(String(line || '').toLowerCase()) + '">' +
     '<span class="log-time">' + esc(parsed.time) + '</span>' +
     '<span class="log-message">' + (levelLabel ? '<span class="log-level">' + levelLabel + '</span>' : '') + esc(parsed.message || ' ') + '</span></div>';
 }
@@ -1015,7 +1026,7 @@ async function loadMainSettings() {
     loadSettingsBranches(s.update_branch || 'main');
   } catch (e) { toast('Could not load settings: ' + e.message, 'bad'); }
 }
-async function saveMainSettings() {
+async function saveMainSettings(options = {}) {
   const body = { complete: true };
   const port = parseInt($('settingsPort').value, 10); if (port) body.port_start = port;
   body.registry_url = $('settingsRegistry').value.trim();
@@ -1027,7 +1038,7 @@ async function saveMainSettings() {
   try {
     await api('/api/setup', { method:'POST', body:JSON.stringify(body) });
     if (body.token) localStorage.setItem('uc_token', body.token); else localStorage.removeItem('uc_token');
-    toast('Settings saved', 'ok');
+    if (!options.silent) toast('Settings saved', 'ok');
     await loadHealth();
   } catch (e) { toast('Could not save settings: ' + e.message, 'bad'); }
 }
@@ -1041,17 +1052,17 @@ async function loadAlertSettings() {
       esc(ALERT_LABELS[cat] || cat) + '</label>').join('');
   } catch (e) {}
 }
-async function saveAlertSettings() {
+async function saveAlertSettings(options = {}) {
   const events = {};
   $('alertEvents').querySelectorAll('input[type=checkbox]').forEach(cb => { events[cb.dataset.cat] = cb.checked; });
   try {
     await api('/api/settings/alerts', { method: 'PUT', body: JSON.stringify({ webhook: $('alertWebhook').value.trim(), events }) });
-    toast('Notifications saved', 'ok');
-  } catch (e) { toast(e.message, 'bad'); }
+    if (!options.silent) toast('Notifications saved', 'ok');
+  } catch (e) { toast(e.message, 'bad'); throw e; }
 }
-async function testAlert() {
+async function testAlert(saveFirst = true) {
   try {
-    await saveAlertSettings();
+    if (saveFirst) await saveAlertSettings();
     await api('/api/settings/alerts/test', { method: 'POST' });
     toast('Test notification sent', 'ok');
   } catch (e) { toast('Test failed: ' + e.message, 'bad'); }
@@ -1399,7 +1410,7 @@ function toggleLogTimestamps(){ $('logConsole')?.classList.toggle('hide-time',!$
 function clearVisibleLogs(){ $('logConsole')?.querySelectorAll('.log-line:not(.filtered-out)').forEach(x=>x.remove()); applyLogFilters(); }
 async function copyVisibleLogs(){ const text=Array.from($('logConsole')?.querySelectorAll('.log-line:not(.filtered-out)')||[]).map(x=>x.textContent).join('\n'); await navigator.clipboard?.writeText(text); toast('Visible logs copied','ok'); }
 const _appendLogLine=appendLogLine; appendLogLine=function(line){ if(LOG_PAUSED){LOG_PENDING.push(line);return;} _appendLogLine(line); if(LOG_AT_LATEST)scrollLogsToLatest(); };
-const _applyLogFilters=applyLogFilters; applyLogFilters=function(){ const c=$('logConsole'); if(!c)return; const query=($('logSearch')?.value||'').trim(), level=$('logLevelFilter')?.value||'', mins=Number($('logTimeFilter')?.value||0), regex=$('logRegex')?.checked; let rx=null; if(regex&&query){try{rx=new RegExp(query,'i');}catch(e){}} let visible=0,total=0; const cutoff=Date.now()-mins*60000; c.querySelectorAll('.log-line').forEach(row=>{total++; const text=row.dataset.search||'', lv=!level||row.dataset.level===level; let qm=!query||(rx?rx.test(text):text.includes(query.toLowerCase())); let tm=true;if(mins){const raw=row.querySelector('.log-time')?.textContent||'';const ts=Date.parse(raw);tm=!Number.isNaN(ts)&&ts>=cutoff;} const show=lv&&qm&&tm;row.classList.toggle('filtered-out',!show);row.classList.toggle('match',show&&!!query);if(show)visible++;});updateLogSummary(visible,total); };
+const _applyLogFilters=applyLogFilters; applyLogFilters=function(){ const c=$('logConsole'); if(!c)return; const query=($('logSearch')?.value||'').trim(), level=$('logLevelFilter')?.value||'', mins=Number($('logTimeFilter')?.value||0), regex=$('logRegex')?.checked; let rx=null; if(regex&&query){try{rx=new RegExp(query,'i');}catch(e){}} let visible=0,total=0; const cutoff=Date.now()-mins*60000; c.querySelectorAll('.log-line').forEach(row=>{total++; const text=row.dataset.search||'', lv=!level||row.dataset.level===level; let qm=!query||(rx?rx.test(text):text.includes(query.toLowerCase())); let tm=true;if(mins){const ts=Number(row.dataset.ts||0);tm=!!ts&&ts>=cutoff;} const show=lv&&qm&&tm;row.classList.toggle('filtered-out',!show);row.classList.toggle('match',show&&!!query);if(show)visible++;});updateLogSummary(visible,total); };
 const _downloadLogs=downloadLogs; downloadLogs=async function(){ const rows=Array.from($('logConsole')?.querySelectorAll('.log-line:not(.filtered-out)')||[]); if(rows.length){const blob=new Blob([rows.map(x=>x.textContent).join('\n')],{type:'text/plain'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(logInstaller?'uc-installer':logTarget)+'-filtered.log';a.click();URL.revokeObjectURL(a.href);return;} return _downloadLogs(); };
 $('logConsole')?.addEventListener('scroll',()=>{const c=$('logConsole');LOG_AT_LATEST=(c.scrollHeight-c.scrollTop-c.clientHeight)<32;});
 
@@ -1408,8 +1419,7 @@ const _renderRemoteList=renderRemoteList; renderRemoteList=function(){ _renderRe
 
 function captureFormBaseline(rootId){ const root=$(rootId); if(!root)return; const data={}; root.querySelectorAll('input,select,textarea').forEach((el,i)=>data[el.id||i]=el.type==='checkbox'?el.checked:el.value); FORM_BASELINES.set(rootId,JSON.stringify(data)); }
 function formDirty(rootId){ const root=$(rootId);if(!root||!FORM_BASELINES.has(rootId))return false;const data={};root.querySelectorAll('input,select,textarea').forEach((el,i)=>data[el.id||i]=el.type==='checkbox'?el.checked:el.value);return JSON.stringify(data)!==FORM_BASELINES.get(rootId);}
-const _openMaint=openMaint; openMaint=function(){_openMaint();setTimeout(()=>captureFormBaseline('maintBack'),500);};
-const _saveMainSettings=saveMainSettings; saveMainSettings=async function(){ const port=Number($('settingsPort')?.value); if(!Number.isInteger(port)||port<1||port>65535){toast('First integration port must be between 1 and 65535','bad');$('settingsPort')?.focus();return;} await _saveMainSettings();captureFormBaseline('maintBack');};
+const _saveMainSettings=saveMainSettings;
 window.addEventListener('beforeunload',e=>{if(formDirty('maintBack')||formDirty('cfgBack')||formDirty('remBack')){e.preventDefault();e.returnValue='';}});
 
 restoreInstalledView();

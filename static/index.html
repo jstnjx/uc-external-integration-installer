@@ -110,7 +110,7 @@
 <div class="field" id="cfgVersionField">
 <label>Version</label>
 <select class="mono" id="cfgVersion" style="width:100%"></select>
-<div class="hint">Which release to install. "latest" tracks the newest build; a specific tag pins it.</div>
+<div class="hint">Choose a release. “Automatic” uses the newest available build whenever the integration is installed or rebuilt; selecting a tag keeps that exact version.</div>
 </div>
 <div class="field" id="cfgPortField">
 <label>Integration port</label>
@@ -224,41 +224,54 @@
 <div class="workspace-view">
 <header><h2>Settings</h2><span class="sub">installer configuration · notifications · system operations</span><button aria-label="Back" class="x" onclick="closeModal('maintBack')" title="Back">←</button></header>
 <div class="body"><div class="settings-grid">
-<section class="settings-section">
+<section class="settings-section" data-settings-tab="general">
 <h3>Integration defaults</h3><div class="hint">Configure the integration port range and registry catalog.</div>
 <div class="field"><label>First integration port</label><input class="mono" id="settingsPort" placeholder="8000"/><div class="hint">New integrations receive ports starting from this value.</div></div>
 <div class="field"><label>Registry URL</label><input class="mono" id="settingsRegistry" placeholder="https://raw.githubusercontent.com/…/registry.json"/></div>
 </section>
-<section class="settings-section">
+<section class="settings-section" data-settings-tab="updates">
 <h3>Installer updates</h3><div class="hint">Choose where installer updates come from and which systemd service is restarted.</div>
 <div class="field"><label>Update repository</label><input class="mono" id="settingsRepo" placeholder="https://github.com/owner/repo"/></div>
 <div class="field"><label>Update branch / build</label><select class="mono" id="settingsBranch"></select></div>
 <div class="field"><label>systemd service name</label><input class="mono" id="settingsService" placeholder="uc-external-integration-installer"/></div>
 </section>
-<section class="settings-section">
+<section class="settings-section" data-settings-tab="access">
 <h3>Health and access</h3><div class="hint">Control active health checks and optional API authentication.</div>
 <label class="checkline"><input id="settingsProbe" type="checkbox"/> Enable WebSocket health probe</label>
 <div class="field" style="margin-top:18px"><label>Access token <span style="color:var(--muted)">· optional</span></label><input class="mono" id="settingsToken" placeholder="leave blank for no authentication" type="password"/></div>
-<div class="settings-actions"><button class="btn btn-primary" onclick="saveMainSettings()">Save configuration</button></div>
+
 </section>
-<section class="settings-section">
+<section class="settings-section" data-settings-tab="notifications">
 <h3>Notifications</h3><div class="hint">Send webhook notifications for selected installer events.</div>
 <div class="field"><label>Webhook</label><input class="mono" id="alertWebhook" placeholder="https://ntfy.sh/your-topic"/></div>
 <div class="alert-events" id="alertEvents"></div>
-<div class="settings-actions"><button class="btn btn-primary btn-sm" onclick="saveAlertSettings()">Save notifications</button><button class="btn btn-line btn-sm" onclick="testAlert()">Send test</button></div>
+<div class="settings-actions"><button class="btn btn-line btn-sm" onclick="testAlert(false)">Send test</button></div>
 </section>
-<section class="settings-section">
+<section class="settings-section" data-settings-tab="backup">
 <h3>Backup and restore</h3><div class="hint">Export or restore all installer configuration and instance state.</div>
 <div class="settings-actions"><button class="btn btn-primary btn-sm" onclick="downloadBackup()">Download backup</button><input accept=".tar.gz,.tgz,application/gzip" id="restoreFile" onchange="restoreBackup(this.files[0])" style="display:none" type="file"/><button class="btn btn-line btn-sm" onclick="$('restoreFile').click()">Restore backup…</button></div>
 </section>
-<section class="settings-section">
-<h3>Docker maintenance</h3><div class="hint">Reconcile managed containers and remove unused build images.</div>
-<div class="settings-actions"><button class="btn btn-line btn-sm" onclick="doReconcile()">Reconcile containers</button><button class="btn btn-line btn-sm" onclick="doPrune()">Prune build images</button></div>
+<section class="settings-section" data-settings-tab="docker">
+<h3>Docker maintenance</h3><div class="hint">Choose exactly how managed containers and build artifacts should be reconciled or cleaned.</div>
+<div class="maintenance-options">
+  <div class="maintenance-card"><h4>Reconcile containers</h4>
+    <label class="checkline"><input id="reconcileAdopt" type="checkbox" checked/> Adopt managed containers missing from installer state</label>
+    <label class="checkline"><input id="reconcileRemoveStale" type="checkbox"/> Remove stale state entries whose containers no longer exist</label>
+    <label class="checkline"><input id="reconcileRestartStopped" type="checkbox"/> Start managed containers that are currently stopped</label>
+    <button class="btn btn-line btn-sm" onclick="doReconcileAdvanced()">Run reconciliation…</button>
+  </div>
+  <div class="maintenance-card"><h4>Prune Docker data</h4>
+    <label class="checkline"><input id="pruneUnusedLocal" type="checkbox" checked/> Remove unused <span class="mono">uc-local/*</span> build images</label>
+    <label class="checkline"><input id="pruneDangling" type="checkbox" checked/> Remove dangling images</label>
+    <label class="checkline"><input id="pruneBuildCache" type="checkbox"/> Remove unused Docker build cache</label>
+    <button class="btn btn-danger btn-sm" onclick="doPruneAdvanced()">Review and prune…</button>
+  </div>
+</div>
 </section>
-<section class="settings-section wide">
+<section class="settings-section wide" data-settings-tab="runtime">
 <h3>Runtime</h3><div class="hint">Read-only values set by the installer service.</div><div class="det-grid runtime-list" id="settingsRuntime"></div>
 </section>
-</div></div>
+</div><div class="settings-save-dock" id="settingsSaveDock"><span id="settingsDirtySummary">Unsaved changes</span><button class="btn btn-line" onclick="discardSettingsChanges()">Discard</button><button class="btn btn-primary" id="settingsUnifiedSave" onclick="saveAllSettings()">Save changes</button></div></div>
 </div>
 </div><div class="workspace-panel" data-workspace-panel="true" id="setupBack">
 <div class="workspace-view">
