@@ -569,6 +569,36 @@
   </div>
 </div>
 
+<!-- FIRST-RUN SETUP -->
+<div class="modal-back" id="setupBack">
+  <div class="modal">
+    <header>
+      <h2>Welcome — first-time setup</h2><span class="sub">configure the installer</span>
+    </header>
+    <div class="body">
+      <p class="hint" style="margin-top:0">A few quick settings to get started. You can change all of these later in Maintenance.</p>
+      <div class="field">
+        <label>First integration port</label>
+        <input id="setupPort" class="mono" placeholder="8000" />
+        <div class="hint">Integrations get ports starting here (8000, 8001, …).</div>
+      </div>
+      <div class="field">
+        <label>Installer update branch</label>
+        <input id="setupBranch" class="mono" placeholder="main" />
+        <div class="hint">Which build of the installer to track for updates. Leave as <span class="mono">main</span> unless you know otherwise.</div>
+      </div>
+      <div class="field">
+        <label>Notifications webhook <span style="color:var(--muted)">· optional</span></label>
+        <input id="setupWebhook" class="mono" placeholder="https://ntfy.sh/your-topic (Discord/Slack/JSON also work)" />
+        <div class="hint">Get notified about installs, updates and health. Fine-tune categories later in Maintenance → Notifications.</div>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="btn btn-primary" onclick="finishSetup()">Finish setup</button>
+    </div>
+  </div>
+</div>
+
 <input type="file" id="instRestoreFile" accept=".tar.gz,.tgz,application/gzip" style="display:none" onchange="doInstanceRestore(this.files[0])" />
 <div id="toasts"></div>
 
@@ -707,6 +737,11 @@ function statusLed(s) {
   if (s === 'missing' || s === 'exited' || s === 'dead') return '<span class="led err"></span>';
   return '<span class="led off"></span>';
 }
+function fmtVer(v) {
+  v = (v || 'latest').toString();
+  if (v.toLowerCase() === 'latest') return 'latest';
+  return /^v\d/i.test(v) ? v : 'v' + v;
+}
 function fmtBytes(n) {
   if (n == null) return '—';
   const u = ['B','KB','MB','GB','TB']; let i = 0; n = Number(n);
@@ -745,7 +780,7 @@ function detailsHtml(it) {
     ['Health', s.health ? '<span style="color:' + healthColor(s.health) + '">' + esc(s.health) + '</span>' : '—'],
   ].map(([k, v]) => '<div class="tile"><div class="tile-v">' + v + '</div><div class="tile-k">' + k + '</div></div>').join('');
   const meta = [
-    ['Version', 'v' + esc(it.version || 'latest')],
+    ['Version', esc(fmtVer(it.version))],
     ['Build', esc((it.source || '—') + (it.stack && it.stack !== 'dockerfile' ? ' · ' + it.stack : ''))],
     ['Driver id', esc(it.driver_id || '—')],
     ['Port', esc(String(it.port))],
@@ -819,7 +854,7 @@ function renderInstalled() {
     const upd = UPDATES[it.id] || {};
     const updateBadge = upd.update_available
       ? '<span class="upd-badge" onclick="openVersion(\'' + it.id + '\')" title="Install the newer version">update ▸ ' +
-        esc(upd.latest_version || '') + '</span>'
+        esc(fmtVer(upd.latest_version || '')) + '</span>'
       : '';
     const regs = REGS[it.id] || [];
     const regBadge = regs.length
@@ -845,7 +880,7 @@ function renderInstalled() {
           '<span class="status-tag">' + statusLed(it.status) + statusText + '</span>' +
           '<span>port ' + esc(String(it.port)) + '</span>' +
           '<span class="src">' + esc(it.source || '') + (it.stack && it.stack !== 'dockerfile' && it.source !== 'ghcr' ? ' · ' + esc(it.stack) : '') + '</span>' +
-          '<span class="ver" title="installed version">v' + esc(ver) + '</span>' +
+          '<span class="ver" title="installed version">' + esc(fmtVer(ver)) + '</span>' +
           updateBadge +
           crashHint +
         '</div>' +
@@ -1442,9 +1477,31 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-back.show').forEach(m => m.classList.remove('show')); });
 
+async function openSetup() {
+  try {
+    const s = await api('/api/setup');
+    $('setupPort').value = s.port_start || 8000;
+    $('setupBranch').value = s.update_branch || 'main';
+    $('setupWebhook').value = s.webhook || '';
+  } catch (e) {}
+  $('setupBack').classList.add('show');
+}
+async function finishSetup() {
+  const body = { complete: true };
+  const p = parseInt($('setupPort').value, 10); if (p) body.port_start = p;
+  const br = $('setupBranch').value.trim(); if (br) body.update_branch = br;
+  const wh = $('setupWebhook').value.trim(); body.webhook = wh;
+  if (wh) body.events = { install: true, update: true, register: false, health: true, remove: false, maintenance: false, error: true };
+  try {
+    await api('/api/setup', { method: 'POST', body: JSON.stringify(body) });
+    $('setupBack').classList.remove('show');
+    location.reload();
+  } catch (e) { toast('Could not save setup: ' + e.message, 'bad'); }
+}
 async function init() {
   const h = await loadHealth();
   if (h.token_required && !token()) return;   // wait for unlock
+  if (h.setup_complete === false) { openSetup(); return; }  // first-run wizard
   try { await loadRegistry(false); } catch (e) {}
   await loadInstalled();
   loadUpdateStatus();

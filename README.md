@@ -17,14 +17,17 @@ network — exactly the model the shell script used, but manageable and re-entra
 - **Reconfigure** ports and environment variables and recreate the container.
 - Runs in the background via **systemd** and survives reboots.
 
-## Quick start (systemd)
+## Quick start (one command)
 
 ```bash
-git clone https://github.com/jstnjx/uc-external-integration-installer.git && cd uc-external-integration-installer && chmod +x install.sh && sudo ./install.sh
+curl -fsSL https://raw.githubusercontent.com/jstnjx/uc-external-integration-installer/main/install.sh | sudo bash
 ```
 
-This clones the repo, builds a virtualenv, installs the systemd service, and
-starts it. Then open `http://<host-ip>:8900`.
+This clones the repo, builds a virtualenv, installs Nixpacks, generates and enables
+the systemd service, and starts it. Then open `http://<host-ip>:8900` and complete
+the **first-time setup** in the UI (port range, update branch, optional
+notifications). Re-run the same command any time to update. Set `LOCAL_INSTALL=1`
+to install from a local checkout instead.
 
 ## Run manually (no systemd)
 
@@ -36,7 +39,9 @@ python uc_installer.py      # serves on 0.0.0.0:8900
 
 ## Configuration
 
-Set via environment (or `systemctl edit uc-external-integration-installer`):
+Configuration is done in the UI — the first launch shows a setup wizard, and
+everything (ports, update branch, notifications) stays editable under **Maintenance**.
+Environment variables act as defaults/overrides (or `systemctl edit uc-external-integration-installer`):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

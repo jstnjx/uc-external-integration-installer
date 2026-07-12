@@ -250,6 +250,71 @@ def notify(category: str, message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# General settings (UI-configurable; first-run flag)
+# ---------------------------------------------------------------------------
+
+SETTINGS_FILE = DATA_DIR / "settings.json"
+_settings_lock = threading.Lock()
+_settings_cache: dict[str, Any] | None = None
+
+
+def load_settings() -> dict[str, Any]:
+    global _settings_cache
+    if _settings_cache is not None:
+        return _settings_cache
+    data: dict[str, Any] = {
+        "setup_complete": False,
+        "port_start": PORT_START,
+        "update_repo": UPDATE_REPO,
+        "update_branch": UPDATE_BRANCH,
+    }
+    try:
+        if SETTINGS_FILE.exists():
+            saved = json.loads(SETTINGS_FILE.read_text())
+            for k in ("port_start", "update_repo", "update_branch"):
+                if saved.get(k) not in (None, ""):
+                    data[k] = saved[k]
+            data["setup_complete"] = bool(saved.get("setup_complete", False))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        data["port_start"] = int(data["port_start"])
+    except (TypeError, ValueError):
+        data["port_start"] = PORT_START
+    _settings_cache = data
+    return data
+
+
+def save_settings(patch: dict[str, Any]) -> dict[str, Any]:
+    global _settings_cache
+    cur = dict(load_settings())
+    for k in ("port_start", "update_repo", "update_branch", "setup_complete"):
+        if k in patch and patch[k] is not None:
+            cur[k] = patch[k]
+    try:
+        cur["port_start"] = int(cur["port_start"])
+    except (TypeError, ValueError):
+        cur["port_start"] = PORT_START
+    cur["setup_complete"] = bool(cur.get("setup_complete", False))
+    with _settings_lock:
+        SETTINGS_FILE.write_text(json.dumps(cur, indent=2))
+    _settings_cache = cur
+    return cur
+
+
+def get_port_start() -> int:
+    return int(load_settings().get("port_start") or PORT_START)
+
+
+def update_repo() -> str:
+    return load_settings().get("update_repo") or UPDATE_REPO
+
+
+def update_branch() -> str:
+    return load_settings().get("update_branch") or UPDATE_BRANCH
+
+
+# ---------------------------------------------------------------------------
 # Persistent state
 # ---------------------------------------------------------------------------
 
@@ -607,17 +672,12 @@ def compute_update(rec: dict[str, Any]) -> dict[str, Any]:
     versions = repo_versions(repo)
     stable = [v for v in versions if not v.get("prerelease")] or versions
     latest_tag = stable[0]["tag"] if stable else None
-    latest_pub = stable[0].get("published_at") if stable else None
 
     available = False
-    if latest_tag:
-        if installed in ("latest", "", None):
-            # tracking a moving tag: flag if a release landed after we installed
-            inst_at = rec.get("installed_at")
-            if latest_pub and inst_at:
-                available = latest_pub > inst_at
-        else:
-            available = version_gt(latest_tag, installed)
+    if latest_tag and installed not in ("latest", "", None):
+        # A specific version is pinned — flag if a newer release exists.
+        # "latest" installs rebuild to newest on demand, so they never "need" an update.
+        available = version_gt(latest_tag, installed)
     return {
         "installed_version": installed,
         "latest_version": latest_tag,
@@ -697,7 +757,7 @@ def _port_free(port: int, exclude: str | None = None) -> bool:
 
 
 def next_free_port(exclude: str | None = None) -> int:
-    port = PORT_START
+    port = get_port_start()
     while not _port_free(port, exclude=exclude):
         port += 1
     return port
@@ -1492,7 +1552,7 @@ def current_commit() -> dict[str, Any]:
 
 
 def latest_commit() -> dict[str, Any]:
-    api = f"https://api.github.com/repos/{_owner_repo_from_url(UPDATE_REPO)}/commits/{UPDATE_BRANCH}"
+    api = f"https://api.github.com/repos/{_owner_repo_from_url(update_repo())}/commits/{update_branch()}"
     resp = httpx.get(
         api,
         headers={
@@ -1529,16 +1589,16 @@ def _run_git_logged(job: Job, *args: str) -> None:
 
 
 def do_update(job: Job, ref: str | None = None) -> None:
-    target = (ref or UPDATE_BRANCH).strip() or UPDATE_BRANCH
+    target = (ref or update_branch()).strip() or update_branch()
     try:
-        job.log(f"Repository: {UPDATE_REPO}  (build: {target})")
+        job.log(f"Repository: {update_repo()}  (build: {target})")
         job.log(f"Install directory: {APP_DIR}")
 
         if not _is_git_repo():
             job.log("Not a git checkout yet — attaching the repository in place ...")
             _run_git_logged(job, "init", "-q")
-            if _git("remote", "add", "origin", UPDATE_REPO).returncode != 0:
-                _run_git_logged(job, "remote", "set-url", "origin", UPDATE_REPO)
+            if _git("remote", "add", "origin", update_repo()).returncode != 0:
+                _run_git_logged(job, "remote", "set-url", "origin", update_repo())
 
         _run_git_logged(job, "fetch", "--depth", "1", "origin", target)
         _run_git_logged(job, "reset", "--hard", "FETCH_HEAD")
@@ -1650,12 +1710,13 @@ def health() -> dict[str, Any]:
         "registry_version": version,
         "integration_count": count,
         "token_required": bool(TOKEN),
-        "port_start": PORT_START,
+        "port_start": get_port_start(),
         "data_dir": str(DATA_DIR),
         "build": current_commit().get("short"),
         "registry_commit": registry_commit(),
         "nixpacks": _nixpacks_available(),
         "host_arch": platform.machine(),
+        "setup_complete": load_settings()["setup_complete"],
         "archive_supported": platform.machine().lower() in ("aarch64", "arm64"),
     }
 
@@ -1664,8 +1725,8 @@ def health() -> dict[str, Any]:
 def api_update_status() -> dict[str, Any]:
     cur = current_commit()
     info: dict[str, Any] = {
-        "repo": UPDATE_REPO,
-        "branch": UPDATE_BRANCH,
+        "repo": update_repo(),
+        "branch": update_branch(),
         "service": SERVICE_UNIT,
         "is_git": _is_git_repo(),
         "service_restartable": _can_restart_service(),
@@ -1687,7 +1748,7 @@ def api_update_status() -> dict[str, Any]:
 def api_update_builds() -> dict[str, Any]:
     """List the branches and tags/releases of the installer repo the user can
     switch to."""
-    owner_repo = _owner_repo_from_url(UPDATE_REPO)
+    owner_repo = _owner_repo_from_url(update_repo())
     headers = {"User-Agent": "uc-external-integration-installer",
                "Accept": "application/vnd.github+json"}
     refs: list[dict[str, str]] = []
@@ -1705,7 +1766,7 @@ def api_update_builds() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         error = f"Could not reach GitHub: {exc}"
     refs = [r for r in refs if r["name"]]
-    return {"repo": UPDATE_REPO, "configured_branch": UPDATE_BRANCH,
+    return {"repo": update_repo(), "configured_branch": update_branch(),
             "current": current_commit(), "refs": refs, "error": error}
 
 
@@ -2519,6 +2580,49 @@ _notified_updates: set[str] = set()
 class AlertSettingsBody(BaseModel):
     webhook: str = ""
     events: dict[str, bool] = {}
+
+
+class SetupBody(BaseModel):
+    port_start: int | None = None
+    update_repo: str | None = None
+    update_branch: str | None = None
+    webhook: str | None = None
+    events: dict[str, bool] | None = None
+    complete: bool = True
+
+
+@app.get("/api/setup", dependencies=[Depends(require_token)])
+def api_get_setup() -> dict[str, Any]:
+    s = load_settings()
+    a = load_alert_settings()
+    return {
+        "setup_complete": s["setup_complete"],
+        "port_start": s["port_start"],
+        "update_repo": s["update_repo"],
+        "update_branch": s["update_branch"],
+        "webhook": a["webhook"],
+        "events": a["events"],
+        "categories": NOTIFY_CATEGORIES,
+    }
+
+
+@app.post("/api/setup", dependencies=[Depends(require_token)])
+def api_post_setup(body: SetupBody) -> dict[str, Any]:
+    patch: dict[str, Any] = {"setup_complete": bool(body.complete)}
+    if body.port_start:
+        patch["port_start"] = int(body.port_start)
+    if body.update_repo is not None:
+        patch["update_repo"] = body.update_repo.strip()
+    if body.update_branch is not None:
+        patch["update_branch"] = body.update_branch.strip()
+    s = save_settings(patch)
+    if body.webhook is not None or body.events is not None:
+        cur = load_alert_settings()
+        save_alert_settings(
+            body.webhook if body.webhook is not None else cur["webhook"],
+            body.events if body.events is not None else cur["events"],
+        )
+    return {"setup_complete": s["setup_complete"], "port_start": s["port_start"]}
 
 
 @app.get("/api/settings/alerts", dependencies=[Depends(require_token)])
