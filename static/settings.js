@@ -1,0 +1,12 @@
+/* Settings section navigation, effect labels, secret controls, and scroll persistence. */
+(() => {
+  const panel=$('maintBack'),body=panel?.querySelector('.body'),sections=[...panel?.querySelectorAll('.settings-section')||[]];
+  if(!body||!sections.length)return;
+  const names=['General','Updates','Access','Notifications','Backup','Docker','Runtime'];
+  const nav=document.createElement('nav');nav.className='settings-nav';nav.innerHTML=sections.map((s,i)=>{const name=names[i]||s.querySelector('h3')?.textContent||'Section';s.id='settings-'+name.toLowerCase();return '<button onclick="document.getElementById(\''+s.id+'\').scrollIntoView({behavior:\'smooth\',block:\'start\'})">'+name+'</button>';}).join('');body.prepend(nav);
+  const effects=['Applies to new integrations','Requires service restart','Applies immediately','Applies immediately','Applies immediately','Applies immediately','Read only'];sections.forEach((s,i)=>{const tag=document.createElement('span');tag.className='effect-tag';tag.textContent=effects[i]||'Applies immediately';s.querySelector('h3')?.appendChild(tag);});
+  function decorateSecret(id){const input=$(id);if(!input)return;const wrap=document.createElement('div');wrap.className='secret-field';input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);const controls=document.createElement('div');controls.className='secret-actions';controls.innerHTML='<button type="button" title="Show or hide">Show</button><button type="button" title="Copy">Copy</button><button type="button" title="Clear">Clear</button>';wrap.appendChild(controls);const [show,copy,clear]=controls.children;show.onclick=()=>{input.type=input.type==='password'?'text':'password';show.textContent=input.type==='password'?'Show':'Hide';};copy.onclick=async()=>{await navigator.clipboard?.writeText(input.value);toast('Copied','ok');};clear.onclick=async()=>{if(input.value){const d=await uiConfirm({title:'Clear saved secret',message:'Clear this secret?',confirmText:'Clear',danger:true});if(!d.confirmed)return;}input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));};input.addEventListener('input',()=>wrap.classList.add('changed'));}
+  ['settingsToken','alertWebhook','remPin','remApiKey'].forEach(decorateSecret);
+  panel.addEventListener('scroll',()=>{AppStore.state.settingsScroll=panel.scrollTop;AppStore.persist();},{passive:true});
+  const oldOpen=window.openMaint;window.openMaint=function(){oldOpen();setTimeout(()=>panel.scrollTop=AppStore.state.settingsScroll||0,150);};
+})();
