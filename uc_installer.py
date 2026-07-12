@@ -257,23 +257,44 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 _settings_lock = threading.Lock()
 _settings_cache: dict[str, Any] | None = None
 
+_STR_SETTINGS = ("registry_url", "update_repo", "update_branch", "update_service", "token")
+
+
+def _env_health_probe_default() -> bool:
+    return os.environ.get("UC_INSTALLER_HEALTH_PROBE", "1") != "0"
+
+
+def _settings_defaults() -> dict[str, Any]:
+    return {
+        "setup_complete": False,
+        "port_start": PORT_START,
+        "registry_url": REGISTRY_URL,
+        "update_repo": UPDATE_REPO,
+        "update_branch": UPDATE_BRANCH,
+        "update_service": SERVICE_UNIT,
+        "health_probe": _env_health_probe_default(),
+        "token": TOKEN,
+    }
+
 
 def load_settings() -> dict[str, Any]:
     global _settings_cache
     if _settings_cache is not None:
         return _settings_cache
-    data: dict[str, Any] = {
-        "setup_complete": False,
-        "port_start": PORT_START,
-        "update_repo": UPDATE_REPO,
-        "update_branch": UPDATE_BRANCH,
-    }
+    data = _settings_defaults()
     try:
         if SETTINGS_FILE.exists():
             saved = json.loads(SETTINGS_FILE.read_text())
-            for k in ("port_start", "update_repo", "update_branch"):
-                if saved.get(k) not in (None, ""):
+            for k in _STR_SETTINGS:
+                if isinstance(saved.get(k), str) and saved.get(k) != "":
                     data[k] = saved[k]
+            if saved.get("port_start") not in (None, ""):
+                data["port_start"] = saved["port_start"]
+            if "health_probe" in saved:
+                data["health_probe"] = bool(saved["health_probe"])
+            # token may legitimately be cleared back to empty
+            if "token" in saved and isinstance(saved["token"], str):
+                data["token"] = saved["token"]
             data["setup_complete"] = bool(saved.get("setup_complete", False))
     except Exception:  # noqa: BLE001
         pass
@@ -288,9 +309,15 @@ def load_settings() -> dict[str, Any]:
 def save_settings(patch: dict[str, Any]) -> dict[str, Any]:
     global _settings_cache
     cur = dict(load_settings())
-    for k in ("port_start", "update_repo", "update_branch", "setup_complete"):
+    for k in _STR_SETTINGS:
         if k in patch and patch[k] is not None:
-            cur[k] = patch[k]
+            cur[k] = str(patch[k]).strip()
+    if patch.get("port_start") is not None:
+        cur["port_start"] = patch["port_start"]
+    if "health_probe" in patch and patch["health_probe"] is not None:
+        cur["health_probe"] = bool(patch["health_probe"])
+    if "setup_complete" in patch and patch["setup_complete"] is not None:
+        cur["setup_complete"] = bool(patch["setup_complete"])
     try:
         cur["port_start"] = int(cur["port_start"])
     except (TypeError, ValueError):
@@ -306,12 +333,28 @@ def get_port_start() -> int:
     return int(load_settings().get("port_start") or PORT_START)
 
 
+def registry_url_val() -> str:
+    return load_settings().get("registry_url") or REGISTRY_URL
+
+
 def update_repo() -> str:
     return load_settings().get("update_repo") or UPDATE_REPO
 
 
 def update_branch() -> str:
     return load_settings().get("update_branch") or UPDATE_BRANCH
+
+
+def service_unit_val() -> str:
+    return load_settings().get("update_service") or SERVICE_UNIT
+
+
+def health_probe_on() -> bool:
+    return bool(load_settings().get("health_probe", True))
+
+
+def token_val() -> str:
+    return (load_settings().get("token") or TOKEN or "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +549,7 @@ def fetch_registry(force: bool = False) -> dict[str, Any]:
         if _registry_cache is not None and not force:
             return _registry_cache
         try:
-            resp = httpx.get(REGISTRY_URL, timeout=20.0, follow_redirects=True)
+            resp = httpx.get(registry_url_val(), timeout=20.0, follow_redirects=True)
             resp.raise_for_status()
             data = resp.json()
             REGISTRY_CACHE.write_text(json.dumps(data))
@@ -535,7 +578,7 @@ _reg_commit_lock = threading.Lock()
 
 
 def _registry_repo_ref() -> tuple[str, str, str] | None:
-    m = re.match(r"https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(.+)", REGISTRY_URL)
+    m = re.match(r"https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(.+)", registry_url_val())
     if not m:
         return None
     owner, repo, rest = m.group(1), m.group(2), m.group(3)
@@ -1336,6 +1379,7 @@ def _run_container(
         "entrypoint": entrypoint or "",
         "version": version or "latest",
         "stack": stack if stack is not None else prev.get("stack"),
+        "auto_update": prev.get("auto_update", False),
         "installed_at": prev.get("installed_at") or datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
@@ -1620,17 +1664,17 @@ def do_update(job: Job, ref: str | None = None) -> None:
                 raise RuntimeError("pip install failed")
 
         if _can_restart_service():
-            job.finish("success", f"Update complete — restarting {SERVICE_UNIT} now.")
+            job.finish("success", f"Update complete — restarting {service_unit_val()} now.")
             time.sleep(2)  # let the UI fetch the final log before we go down
             subprocess.Popen(
                 ["systemd-run", "--no-block", "--collect",
-                 "systemctl", "restart", SERVICE_UNIT],
+                 "systemctl", "restart", service_unit_val()],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         else:
             job.finish(
                 "success",
-                f"Update complete. Restart to apply: systemctl restart {SERVICE_UNIT} "
+                f"Update complete. Restart to apply: systemctl restart {service_unit_val()} "
                 "(or restart the process).",
             )
     except Exception as exc:  # noqa: BLE001
@@ -1678,13 +1722,14 @@ class ActiveRemoteBody(BaseModel):
 
 def require_token(authorization: str | None = Header(default=None),
                   token: str | None = Query(default=None)) -> None:
-    if not TOKEN:
+    tok = token_val()
+    if not tok:
         return
     supplied = None
     if authorization and authorization.lower().startswith("bearer "):
         supplied = authorization[7:].strip()
     supplied = supplied or token
-    if supplied != TOKEN:
+    if supplied != tok:
         raise HTTPException(status_code=401, detail="Invalid or missing token")
 
 
@@ -1709,13 +1754,16 @@ def health() -> dict[str, Any]:
         "registry_ok": reg_ok,
         "registry_version": version,
         "integration_count": count,
-        "token_required": bool(TOKEN),
+        "token_required": bool(token_val()),
         "port_start": get_port_start(),
         "data_dir": str(DATA_DIR),
         "build": current_commit().get("short"),
         "registry_commit": registry_commit(),
         "nixpacks": _nixpacks_available(),
         "host_arch": platform.machine(),
+        "bind_host": os.environ.get("UC_INSTALLER_HOST", "0.0.0.0"),
+        "bind_port": int(os.environ.get("UC_INSTALLER_PORT", "8900")),
+        "data_dir": str(DATA_DIR),
         "setup_complete": load_settings()["setup_complete"],
         "archive_supported": platform.machine().lower() in ("aarch64", "arm64"),
     }
@@ -1727,7 +1775,7 @@ def api_update_status() -> dict[str, Any]:
     info: dict[str, Any] = {
         "repo": update_repo(),
         "branch": update_branch(),
-        "service": SERVICE_UNIT,
+        "service": service_unit_val(),
         "is_git": _is_git_repo(),
         "service_restartable": _can_restart_service(),
         "current": cur,
@@ -1912,6 +1960,23 @@ def api_rebuild(instance_id: str, body: RebuildBody) -> dict[str, str]:
     job = new_job("rebuild", instance_id)
     threading.Thread(target=do_rebuild, args=(rec, job, body.version), daemon=True).start()
     return {"job_id": job.id}
+
+
+class AutoUpdateBody(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/instances/{instance_id}/auto-update", dependencies=[Depends(require_token)])
+def api_auto_update(instance_id: str, body: AutoUpdateBody) -> dict[str, Any]:
+    state = load_state()
+    rec = state["integrations"].get(instance_id)
+    if rec is None:
+        raise HTTPException(404, "Instance is not installed")
+    rec["auto_update"] = bool(body.enabled)
+    save_state(state)
+    record_event("lifecycle", instance_id,
+                 f"auto-update {'enabled' if body.enabled else 'disabled'}")
+    return {"auto_update": rec["auto_update"]}
 
 
 @app.get("/api/jobs/{job_id}", dependencies=[Depends(require_token)])
@@ -2121,7 +2186,7 @@ def _probe_port(port: Any, host: str = "127.0.0.1", timeout: float = 1.5) -> boo
 
 
 def _probe_health(port: Any) -> str | None:
-    if not HEALTH_PROBE_ENABLED:
+    if not health_probe_on():
         return None
     keyp = str(port)
     now = time.time()
@@ -2560,6 +2625,52 @@ def api_reconcile() -> dict[str, Any]:
     return {"status": "ok"}
 
 
+@app.get("/api/installer/logs", dependencies=[Depends(require_token)])
+def api_installer_logs(lines: int = 500) -> dict[str, str]:
+    """The installer's own service logs (journalctl)."""
+    unit = service_unit_val()
+    if not shutil.which("journalctl"):
+        return {"logs": "journalctl is not available on this host — the installer's "
+                        "logs live wherever its process output is captured "
+                        f"(e.g. `docker logs`, or the console if run manually).",
+                "source": "none"}
+    try:
+        p = subprocess.run(
+            ["journalctl", "-u", unit, "--no-pager", "-n", str(max(1, min(lines, 5000)))],
+            capture_output=True, text=True, timeout=15,
+        )
+        out = (p.stdout or "") + (p.stderr or "")
+        if not out.strip():
+            out = f"(no journal entries for unit '{unit}')"
+        return {"logs": out, "source": "journalctl", "unit": unit}
+    except Exception as exc:  # noqa: BLE001
+        return {"logs": f"Could not read the journal: {exc}", "source": "error"}
+
+
+@app.get("/api/installer/logs/stream", dependencies=[Depends(require_token)])
+def api_installer_logs_stream(lines: int = 200):
+    unit = service_unit_val()
+    if not shutil.which("journalctl"):
+        def unavailable():
+            yield "data: journalctl is not available on this host\n\n"
+        return StreamingResponse(unavailable(), media_type="text/event-stream")
+
+    def gen():
+        proc = subprocess.Popen(
+            ["journalctl", "-u", unit, "--no-pager", "-n", str(max(1, min(lines, 2000))), "-f"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        try:
+            for line in proc.stdout:  # type: ignore[union-attr]
+                yield f"data: {line.rstrip()}\n\n"
+        except Exception:  # noqa: BLE001
+            return
+        finally:
+            proc.terminate()
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
 @app.post("/api/install-archive", dependencies=[Depends(require_token)])
 async def api_install_archive(file: UploadFile = File(...)) -> dict[str, str]:
     if not docker_available():
@@ -2575,6 +2686,22 @@ async def api_install_archive(file: UploadFile = File(...)) -> dict[str, str]:
 
 _alert_state: dict[str, str] = {}
 _notified_updates: set[str] = set()
+_autoupdate_inflight: set[str] = set()
+
+
+def _auto_update_instance(iid: str, target: str) -> None:
+    try:
+        rec = load_state()["integrations"].get(iid)
+        if rec is None:
+            return
+        record_event("update", iid,
+                     f"auto-updating {rec.get('label', iid)} to {target}")
+        job = new_job("auto-update", iid)
+        do_rebuild(rec, job, version=target)
+    except Exception as exc:  # noqa: BLE001
+        record_event("error", iid, f"auto-update failed: {exc}")
+    finally:
+        _autoupdate_inflight.discard(iid)
 
 
 class AlertSettingsBody(BaseModel):
@@ -2584,8 +2711,12 @@ class AlertSettingsBody(BaseModel):
 
 class SetupBody(BaseModel):
     port_start: int | None = None
+    registry_url: str | None = None
     update_repo: str | None = None
     update_branch: str | None = None
+    update_service: str | None = None
+    health_probe: bool | None = None
+    token: str | None = None
     webhook: str | None = None
     events: dict[str, bool] | None = None
     complete: bool = True
@@ -2598,11 +2729,19 @@ def api_get_setup() -> dict[str, Any]:
     return {
         "setup_complete": s["setup_complete"],
         "port_start": s["port_start"],
+        "registry_url": s["registry_url"],
         "update_repo": s["update_repo"],
         "update_branch": s["update_branch"],
+        "update_service": s["update_service"],
+        "health_probe": s["health_probe"],
+        "token": s.get("token", ""),
         "webhook": a["webhook"],
         "events": a["events"],
         "categories": NOTIFY_CATEGORIES,
+        # read-only, set at install time (env / systemd unit)
+        "bind_host": os.environ.get("UC_INSTALLER_HOST", "0.0.0.0"),
+        "bind_port": int(os.environ.get("UC_INSTALLER_PORT", "8900")),
+        "data_dir": str(DATA_DIR),
     }
 
 
@@ -2611,10 +2750,12 @@ def api_post_setup(body: SetupBody) -> dict[str, Any]:
     patch: dict[str, Any] = {"setup_complete": bool(body.complete)}
     if body.port_start:
         patch["port_start"] = int(body.port_start)
-    if body.update_repo is not None:
-        patch["update_repo"] = body.update_repo.strip()
-    if body.update_branch is not None:
-        patch["update_branch"] = body.update_branch.strip()
+    for field in ("registry_url", "update_repo", "update_branch", "update_service", "token"):
+        val = getattr(body, field)
+        if val is not None:
+            patch[field] = val.strip()
+    if body.health_probe is not None:
+        patch["health_probe"] = bool(body.health_probe)
     s = save_settings(patch)
     if body.webhook is not None or body.events is not None:
         cur = load_alert_settings()
@@ -2670,11 +2811,16 @@ def _alert_monitor() -> None:
                     except Exception:  # noqa: BLE001
                         continue
                     if upd.get("update_available"):
-                        if iid not in _notified_updates:
+                        target = upd.get("latest_version")
+                        if rec.get("auto_update") and target and iid not in _autoupdate_inflight:
+                            _autoupdate_inflight.add(iid)
+                            threading.Thread(target=_auto_update_instance,
+                                             args=(iid, target), daemon=True).start()
+                        elif not rec.get("auto_update") and iid not in _notified_updates:
                             _notified_updates.add(iid)
                             record_event("update", iid,
                                          f"update available for {rec.get('label', iid)}: "
-                                         f"{upd.get('latest_version')} (installed {upd.get('installed_version')})")
+                                         f"{target} (installed {upd.get('installed_version')})")
                     else:
                         _notified_updates.discard(iid)
         except Exception:  # noqa: BLE001
@@ -2718,8 +2864,8 @@ if __name__ == "__main__":
 
     host = os.environ.get("UC_INSTALLER_HOST", "0.0.0.0")
     port = int(os.environ.get("UC_INSTALLER_PORT", "8900"))
-    if not TOKEN:
-        print("WARNING: UC_INSTALLER_TOKEN is not set — the web UI and Docker "
+    if not token_val():
+        print("WARNING: no access token is set — the web UI and Docker "
               "control are open to anyone who can reach this port.")
     print(f"UC External Integration Installer -> http://{host}:{port}  (data: {DATA_DIR})")
     uvicorn.run(app, host=host, port=port)

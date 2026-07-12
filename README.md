@@ -160,6 +160,11 @@ can revoke over reusing sensitive credentials.
   until the driver actually appears/connects and reports the result.
 - **Live logs**: the Logs dialog can **Follow** (server-sent events stream) and
   **Download** the full log. Installs are **serialized** so concurrent builds don't clash.
+- **Auto-update** (per integration): toggle **More ▾ → Auto-update** on any instance.
+  When on, a background check (hourly) rebuilds that instance to the newest release
+  as soon as one is published; a ⟳ badge shows on the row. Off by default.
+- **Installer logs**: **Maintenance → View installer logs** shows this service's own
+  logs from the systemd journal, with live **Follow** and **Download**.
 - **Notifications**: configure a webhook in **Maintenance → Notifications** (ntfy,
   Discord, Slack, or any JSON webhook — the payload includes the fields each expects)
   and tick which events to be notified about — installs, updates available,
@@ -236,6 +241,8 @@ uc-external-integration-installer/
 `GET /api/stats` ·
 `POST /api/integrations/{id}/add-instance` ·
 `POST /api/instances/{iid}/{start|stop|restart|config|rebuild}` ·
+`POST /api/instances/{iid}/auto-update` ·
+`GET /api/installer/logs[/stream]` ·
 `DELETE /api/instances/{iid}` · `GET /api/instances/{iid}/logs[/stream]` ·
 `GET /api/events` · `GET /api/backup` · `POST /api/restore` · `POST /api/install-archive` ·
 `POST /api/maintenance/{prune|reconcile}` ·

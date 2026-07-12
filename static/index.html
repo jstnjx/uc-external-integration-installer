@@ -243,6 +243,8 @@
   .mini:hover { border-color: var(--line-2); color: var(--ink); }
   .alert-events { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; }
   .alert-events .checkline { font-size: 13px; }
+  .auto-badge { color: var(--yellow); border: 1px solid rgba(250,255,105,.28); border-radius: 999px;
+    padding: 1px 8px; font-size: 11px; }
   .empty h3 { color: var(--ink); font-weight: 700; margin: 0 0 6px; font-size: 18px; letter-spacing: -.3px; }
 
   /* ---------- token / lock bar ---------- */
@@ -534,6 +536,17 @@
     </header>
     <div class="body">
       <div class="field">
+        <label>Settings</label>
+        <div class="hint" style="margin:0 0 8px">Ports, registry, updates, health probe, and access token.</div>
+        <button class="btn btn-line btn-sm" onclick="closeModal('maintBack');openSetup()">Open all settings…</button>
+      </div>
+      <div class="field">
+        <label>Installer logs</label>
+        <div class="hint" style="margin:0 0 8px">View this service's own logs (systemd journal), with live follow.</div>
+        <button class="btn btn-line btn-sm" onclick="closeModal('maintBack');openInstallerLogs()">View installer logs</button>
+      </div>
+      <div style="height:1px;background:var(--line);margin:6px 0 18px"></div>
+      <div class="field">
         <label>Notifications</label>
         <div class="hint" style="margin:0 0 8px">Send a webhook when things happen. Works with ntfy (paste your topic URL) or any JSON webhook.</div>
         <input id="alertWebhook" class="mono" placeholder="https://ntfy.sh/your-topic" style="margin-bottom:10px" />
@@ -573,28 +586,64 @@
 <div class="modal-back" id="setupBack">
   <div class="modal">
     <header>
-      <h2>Welcome — first-time setup</h2><span class="sub">configure the installer</span>
+      <h2 id="setupTitle">Welcome — first-time setup</h2><span class="sub">configure the installer</span>
     </header>
     <div class="body">
-      <p class="hint" style="margin-top:0">A few quick settings to get started. You can change all of these later in Maintenance.</p>
+      <p class="hint" style="margin-top:0">Set things up to your liking. Everything here stays editable later under Maintenance → Settings.</p>
+
+      <div class="eyebrow" style="margin:6px 0 10px">Integrations</div>
       <div class="field">
         <label>First integration port</label>
         <input id="setupPort" class="mono" placeholder="8000" />
-        <div class="hint">Integrations get ports starting here (8000, 8001, …).</div>
+        <div class="hint">Integrations get host ports starting here (8000, 8001, …).</div>
       </div>
       <div class="field">
-        <label>Installer update branch</label>
-        <input id="setupBranch" class="mono" placeholder="main" />
-        <div class="hint">Which build of the installer to track for updates. Leave as <span class="mono">main</span> unless you know otherwise.</div>
+        <label>Registry URL</label>
+        <input id="setupRegistry" class="mono" placeholder="https://raw.githubusercontent.com/…/registry.json" />
+        <div class="hint">Source of the browsable integration catalog.</div>
+      </div>
+
+      <div class="eyebrow" style="margin:16px 0 10px">Updates</div>
+      <div class="field">
+        <label>Update repository</label>
+        <input id="setupRepo" class="mono" placeholder="https://github.com/owner/repo" />
+        <div class="hint">Git repo the installer updates itself from.</div>
       </div>
       <div class="field">
-        <label>Notifications webhook <span style="color:var(--muted)">· optional</span></label>
+        <label>Update branch / build</label>
+        <select id="setupBranch" class="mono"></select>
+        <div class="hint">Which build to track. Loaded from the update repo; falls back to a text default if offline.</div>
+      </div>
+      <div class="field">
+        <label>systemd service name</label>
+        <input id="setupService" class="mono" placeholder="uc-external-integration-installer" />
+        <div class="hint">Unit restarted after an update. Change only if you renamed it.</div>
+      </div>
+
+      <div class="eyebrow" style="margin:16px 0 10px">Health &amp; access</div>
+      <label class="checkline"><input type="checkbox" id="setupProbe" checked> Enable WebSocket health probe</label>
+      <div class="hint" style="margin:4px 0 12px">Periodically checks each integration is serving. Disable to remove all extra connections.</div>
+      <div class="field">
+        <label>Access token <span style="color:var(--muted)">· optional</span></label>
+        <input id="setupToken" class="mono" placeholder="leave blank for no authentication" />
+        <div class="hint">If set, the UI and API require this bearer token. It will be remembered in this browser.</div>
+      </div>
+
+      <div class="eyebrow" style="margin:16px 0 10px">Notifications</div>
+      <div class="field">
+        <label>Webhook <span style="color:var(--muted)">· optional</span></label>
         <input id="setupWebhook" class="mono" placeholder="https://ntfy.sh/your-topic (Discord/Slack/JSON also work)" />
-        <div class="hint">Get notified about installs, updates and health. Fine-tune categories later in Maintenance → Notifications.</div>
+        <div class="hint">Where to send notifications. Pick which events below.</div>
       </div>
+      <div id="setupEvents" class="alert-events"></div>
+
+      <div class="eyebrow" style="margin:16px 0 10px">Runtime <span style="color:var(--muted-2)">· set at install time</span></div>
+      <div class="det-grid" id="setupRuntime"></div>
+      <div class="hint" style="margin-top:8px">These are fixed by the systemd unit — to change them, re-run <span class="mono">install.sh</span> with the matching env vars (or edit the unit).</div>
     </div>
     <div class="foot">
-      <button class="btn btn-primary" onclick="finishSetup()">Finish setup</button>
+      <button class="btn btn-line" id="setupCancel" onclick="closeModal('setupBack')" style="display:none">Cancel</button>
+      <button class="btn btn-primary" id="setupFinish" onclick="finishSetup()">Finish setup</button>
     </div>
   </div>
 </div>
@@ -884,7 +933,9 @@ function renderInstalled() {
           updateBadge +
           crashHint +
         '</div>' +
-        '<div class="meta" style="margin-top:4px">' + regBadge + statline + '</div>' +
+        '<div class="meta" style="margin-top:4px">' + regBadge +
+          (it.auto_update ? '<span class="auto-badge" title="Auto-updates when a new version is released">⟳ auto-update</span>' : '') +
+          statline + '</div>' +
       '</div>' +
       '<div class="row-actions">' + toggle +
         '<button class="btn btn-line btn-sm" onclick="openLogs(\'' + it.id + '\')">Logs</button>' +
@@ -897,6 +948,7 @@ function renderInstalled() {
             '<button onclick="openVersion(\'' + it.id + '\')">Change version</button>' +
             '<button onclick="openConfig(\'' + it.id + '\')">Configure</button>' +
             '<button onclick="rebuild(\'' + it.id + '\')">Rebuild</button>' +
+            '<button onclick="toggleAutoUpdate(\'' + it.id + '\')">Auto-update: ' + (it.auto_update ? 'on' : 'off') + '</button>' +
             '<div class="menu-sep"></div>' +
             '<button onclick="backupInstance(\'' + it.id + '\')">Backup config</button>' +
             '<button onclick="restoreInstance(\'' + it.id + '\')">Restore config…</button>' +
@@ -925,6 +977,15 @@ async function rebuild(id) {
   try {
     const { job_id } = await api('/api/instances/' + id + '/rebuild', { method: 'POST', body: '{}' });
     followJob(job_id, 'Rebuilding ' + id);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function toggleAutoUpdate(id) {
+  const it = INSTALLED.find(x => x.id === id); if (!it) return;
+  const next = !it.auto_update;
+  try {
+    await api('/api/instances/' + id + '/auto-update', { method: 'POST', body: JSON.stringify({ enabled: next }) });
+    toast('Auto-update ' + (next ? 'enabled' : 'disabled') + (next ? ' — updates apply automatically when released' : ''), 'ok');
+    loadInstalled();
   } catch (e) { toast(e.message, 'bad'); }
 }
 async function addInstance(integrationId) {
@@ -1062,23 +1123,41 @@ function followJob(jobId, title) {
 function closeJob() { closeModal('jobBack'); loadInstalled(); }
 
 // ---- logs ----
+let logInstaller = false;
 async function openLogs(id) {
   if (logSource) { logSource.close(); logSource = null; }
   $('logFollowBtn').textContent = 'Follow'; $('logFollowBtn').classList.remove('det-open');
+  logInstaller = false;
   logTarget = id;
+  document.querySelector('#logBack h2').textContent = 'Logs';
   $('logSub').textContent = id;
   $('logConsole').textContent = 'Loading…';
   $('logBack').classList.add('show');
   refreshLogs();
 }
+async function openInstallerLogs() {
+  if (logSource) { logSource.close(); logSource = null; }
+  $('logFollowBtn').textContent = 'Follow'; $('logFollowBtn').classList.remove('det-open');
+  logInstaller = true; logTarget = null;
+  document.querySelector('#logBack h2').textContent = 'Installer logs';
+  $('logSub').textContent = 'systemd journal';
+  $('logConsole').textContent = 'Loading…';
+  $('logBack').classList.add('show');
+  refreshLogs();
+}
 async function refreshLogs() {
-  if (!logTarget) return;
+  const c = $('logConsole');
   try {
-    const { logs } = await api('/api/instances/' + logTarget + '/logs?tail=400');
-    const c = $('logConsole');
+    let logs;
+    if (logInstaller) {
+      logs = (await api('/api/installer/logs?lines=800')).logs;
+    } else {
+      if (!logTarget) return;
+      logs = (await api('/api/instances/' + logTarget + '/logs?tail=400')).logs;
+    }
     c.textContent = logs || '(no output yet)';
     c.scrollTop = c.scrollHeight;
-  } catch (e) { $('logConsole').textContent = e.message; }
+  } catch (e) { c.textContent = e.message; }
 }
 
 // ---- misc ----
@@ -1443,7 +1522,8 @@ let logSource = null;
 function toggleFollow() {
   if (logSource) { logSource.close(); logSource = null; $('logFollowBtn').textContent = 'Follow'; $('logFollowBtn').classList.remove('det-open'); return; }
   const t = token() ? ('?token=' + encodeURIComponent(token())) : '';
-  logSource = new EventSource('/api/instances/' + logTarget + '/logs/stream' + t);
+  const url = logInstaller ? ('/api/installer/logs/stream' + t) : ('/api/instances/' + logTarget + '/logs/stream' + t);
+  logSource = new EventSource(url);
   const c = $('logConsole');
   logSource.onmessage = (e) => { c.textContent += (c.textContent ? '\n' : '') + e.data; c.scrollTop = c.scrollHeight; };
   logSource.onerror = () => {};
@@ -1451,14 +1531,17 @@ function toggleFollow() {
 }
 async function downloadLogs() {
   try {
-    const { logs } = await api('/api/instances/' + logTarget + '/logs?tail=5000');
+    let logs, name;
+    if (logInstaller) { logs = (await api('/api/installer/logs?lines=5000')).logs; name = 'uc-installer'; }
+    else { logs = (await api('/api/instances/' + logTarget + '/logs?tail=5000')).logs; name = logTarget; }
     const blob = new Blob([logs || ''], { type: 'text/plain' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = logTarget + '.log'; a.click(); URL.revokeObjectURL(a.href);
+    a.download = name + '.log'; a.click(); URL.revokeObjectURL(a.href);
   } catch (e) { toast(e.message, 'bad'); }
 }
 function closeLogs() {
   if (logSource) { logSource.close(); logSource = null; }
+  logInstaller = false;
   $('logFollowBtn').textContent = 'Follow'; $('logFollowBtn').classList.remove('det-open');
   closeModal('logBack');
 }
@@ -1477,23 +1560,69 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-back.show').forEach(m => m.classList.remove('show')); });
 
+async function loadSetupBranches(selected) {
+  const sel = $('setupBranch');
+  sel.innerHTML = '<option>loading…</option>';
+  const fallback = () => {
+    const opts = new Set([selected || 'main', 'main']);
+    sel.innerHTML = Array.from(opts).map(n => '<option value="' + esc(n) + '"' + (n === (selected || 'main') ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+  };
+  try {
+    const data = await api('/api/update/builds');
+    const branches = (data.refs || []).filter(r => r.type === 'branch');
+    const tags = (data.refs || []).filter(r => r.type === 'tag');
+    if (!branches.length && !tags.length) return fallback();
+    let html = '';
+    const names = new Set();
+    if (branches.length) html += '<optgroup label="Branches">' + branches.map(r => { names.add(r.name); return '<option value="' + esc(r.name) + '"' + (r.name === selected ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') + '</optgroup>';
+    if (tags.length) html += '<optgroup label="Releases / tags">' + tags.map(r => { names.add(r.name); return '<option value="' + esc(r.name) + '"' + (r.name === selected ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') + '</optgroup>';
+    if (selected && !names.has(selected)) html = '<option value="' + esc(selected) + '" selected>' + esc(selected) + ' (current)</option>' + html;
+    sel.innerHTML = html;
+  } catch (e) { fallback(); }
+}
 async function openSetup() {
   try {
     const s = await api('/api/setup');
     $('setupPort').value = s.port_start || 8000;
-    $('setupBranch').value = s.update_branch || 'main';
+    $('setupRegistry').value = s.registry_url || '';
+    $('setupRepo').value = s.update_repo || '';
+    $('setupService').value = s.update_service || '';
+    $('setupProbe').checked = s.health_probe !== false;
+    $('setupToken').value = s.token || '';
     $('setupWebhook').value = s.webhook || '';
+    $('setupEvents').innerHTML = (s.categories || []).map(cat =>
+      '<label class="checkline"><input type="checkbox" data-cat="' + cat + '"' + (s.events && s.events[cat] ? ' checked' : '') + '> ' +
+      esc(ALERT_LABELS[cat] || cat) + '</label>').join('');
+    $('setupRuntime').innerHTML = [
+      ['Bind address', (s.bind_host || '0.0.0.0') + ':' + (s.bind_port || 8900)],
+      ['Data directory', s.data_dir || '—'],
+    ].map(([k, v]) => '<div class="kv"><span class="k2">' + k + '</span><span class="v2 mono">' + esc(v) + '</span></div>').join('');
+    loadSetupBranches(s.update_branch || 'main');
+    const done = s.setup_complete === true;
+    $('setupTitle').textContent = done ? 'Settings' : 'Welcome — first-time setup';
+    $('setupFinish').textContent = done ? 'Save settings' : 'Finish setup';
+    $('setupCancel').style.display = done ? '' : 'none';
   } catch (e) {}
   $('setupBack').classList.add('show');
 }
 async function finishSetup() {
   const body = { complete: true };
   const p = parseInt($('setupPort').value, 10); if (p) body.port_start = p;
-  const br = $('setupBranch').value.trim(); if (br) body.update_branch = br;
-  const wh = $('setupWebhook').value.trim(); body.webhook = wh;
-  if (wh) body.events = { install: true, update: true, register: false, health: true, remove: false, maintenance: false, error: true };
+  body.registry_url = $('setupRegistry').value.trim();
+  body.update_repo = $('setupRepo').value.trim();
+  body.update_branch = ($('setupBranch').value || '').trim();
+  body.update_service = $('setupService').value.trim();
+  body.health_probe = $('setupProbe').checked;
+  const tok = $('setupToken').value.trim();
+  body.token = tok;
+  body.webhook = $('setupWebhook').value.trim();
+  const events = {};
+  $('setupEvents').querySelectorAll('input[type=checkbox]').forEach(cb => { events[cb.dataset.cat] = cb.checked; });
+  body.events = events;
   try {
     await api('/api/setup', { method: 'POST', body: JSON.stringify(body) });
+    // remember the token we just set so the reload isn't locked out
+    if (tok) localStorage.setItem('uc_token', tok); else localStorage.removeItem('uc_token');
     $('setupBack').classList.remove('show');
     location.reload();
   } catch (e) { toast('Could not save setup: ' + e.message, 'bad'); }
