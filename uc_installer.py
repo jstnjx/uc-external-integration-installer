@@ -31,6 +31,7 @@ Configuration (environment variables):
 """
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -1899,25 +1900,63 @@ def _compute_stats(container) -> dict[str, Any]:
     }
 
 
-def _probe_port(port: Any, host: str = "127.0.0.1", timeout: float = 1.0) -> bool | None:
-    """True if something is accepting TCP connections on the port, False if not,
-    None if the port is unknown."""
+HEALTH_PROBE_ENABLED = os.environ.get("UC_INSTALLER_HEALTH_PROBE", "1") != "0"
+_HEALTH_TTL = 30.0
+_health_cache: dict[str, tuple[float, str | None]] = {}
+_health_lock = threading.Lock()
+
+
+def _probe_port(port: Any, host: str = "127.0.0.1", timeout: float = 1.5) -> bool | None:
+    """Liveness probe that performs a proper WebSocket opening handshake.
+
+    UC integrations run a WebSocket server (ucapi). A bare TCP connect-and-close
+    makes that server log a noisy "opening handshake failed / did not receive a
+    valid HTTP request" traceback, so we send a real Upgrade request (and a clean
+    close frame) — the integration sees a normal client, not malformed input.
+    Returns True if the port accepts the connection, False if refused, None if the
+    port is unknown."""
     try:
         p = int(port)
     except (TypeError, ValueError):
         return None
+    key = base64.b64encode(os.urandom(16)).decode()
+    req = (
+        "GET / HTTP/1.1\r\n"
+        f"Host: {host}:{p}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n"
+    ).encode()
     try:
-        with socket.create_connection((host, p), timeout=timeout):
+        with socket.create_connection((host, p), timeout=timeout) as s:
+            s.settimeout(timeout)
+            try:
+                s.sendall(req)
+                s.recv(256)                                # let the server send its 101
+                s.sendall(b"\x88\x80\x00\x00\x00\x00")     # masked empty close frame
+            except OSError:
+                pass  # port was open; a clean close is best-effort
             return True
     except OSError:
         return False
 
 
 def _probe_health(port: Any) -> str | None:
-    ok = _probe_port(port)
-    if ok is None:
+    if not HEALTH_PROBE_ENABLED:
         return None
-    return "responding" if ok else "unreachable"
+    keyp = str(port)
+    now = time.time()
+    with _health_lock:
+        hit = _health_cache.get(keyp)
+        if hit and now - hit[0] < _HEALTH_TTL:
+            return hit[1]
+    ok = _probe_port(port)
+    val = None if ok is None else ("responding" if ok else "unreachable")
+    with _health_lock:
+        _health_cache[keyp] = (now, val)
+    return val
 
 
 def _refresh_stats() -> None:

@@ -50,6 +50,7 @@ Set via environment (or `systemctl edit uc-external-integration-installer`):
 | `UC_INSTALLER_UPDATE_BRANCH` | `main` | Branch the updater tracks |
 | `UC_INSTALLER_SERVICE` | `uc-external-integration-installer` | systemd unit restarted after an update |
 | `UC_INSTALLER_ALERT_WEBHOOK` | *(empty)* | If set, POSTs an alert when an instance goes unreachable/exits (ntfy URL or generic JSON webhook) |
+| `UC_INSTALLER_HEALTH_PROBE` | `1` | Set to `0` to disable the periodic WebSocket health probe (health then shows only container state) |
 
 ## Updating
 
@@ -93,10 +94,13 @@ uptime and health**, and a **Details** panel expands to the full record (image,
 driver id, build stack, install/update timestamps, repository) plus live usage
 (CPU %, memory used/limit, processes, uptime, health, restart count). Stats are
 sampled from Docker in the background and cached, so the UI never blocks on them.
-Since these images don't ship a Docker `HEALTHCHECK`, **health** is derived from an
-application-level probe of the integration's port: `responding` if it's accepting
-connections, `unreachable` if the container is running but not serving (a real Docker
-healthcheck is used instead when an image defines one).
+Since these images don't ship a Docker `HEALTHCHECK`, **health** is derived from a
+periodic probe of the integration's WebSocket port: `responding` if it completes a
+WebSocket handshake, `unreachable` if the container is running but not serving. The
+probe performs a real handshake (not a bare TCP connect) so it doesn't spam the
+integration's log, is cached (~30s), and can be turned off with
+`UC_INSTALLER_HEALTH_PROBE=0`. A real Docker healthcheck is used instead when an
+image defines one.
 
 Remote credentials are saved in `UC_INSTALLER_DATA/remotes.json` (file mode `600`,
 plaintext). Keep the data directory private; prefer a per-remote PIN/API key you
