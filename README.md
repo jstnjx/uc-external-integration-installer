@@ -1,3 +1,5 @@
+![](docs/screenshots/logo.png)
+
 # UC External Integration Installer
 
 A self-hosted web application for installing, configuring, updating, monitoring, and managing **Unfolded Circle external integrations**.
