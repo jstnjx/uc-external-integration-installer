@@ -4,6 +4,8 @@ A self-hosted web application for installing, configuring, updating, monitoring,
 
 The installer provides a browser-based interface for managing integration instances, registering drivers on UC remotes, viewing logs and health data, maintaining Docker resources, and updating the installer itself.
 
+![Installed Integrations](docs/screenshots/installed-integrations.png)
+
 
 ## Quick Navigation
 
@@ -108,6 +110,8 @@ Unregister drivers from your UC remotes before uninstalling if you do not want r
 
 The default page for operating installed integration instances.
 
+![Installed Integrations](docs/screenshots/installed-integrations.png)
+
 - Runtime state and resource usage
 - Lifecycle controls
 - Version management
@@ -119,13 +123,19 @@ The default page for operating installed integration instances.
 - Backup and restore
 - Rebuild and removal
 
+![Integration Update Settings](docs/screenshots/integration-updates.png)
+
 ### Browse
 
 Browse and install supported entries from the configured registry.
 
+![Browse Integrations](docs/screenshots/browse-integrations.png)
+
 ### Remotes
 
 Manage UC remotes and their drivers.
+
+![Remotes](docs/screenshots/remotes.png)
 
 - Add and edit remotes
 - Test reachability
@@ -139,6 +149,8 @@ Remote credentials are stored in the installer data directory. Keep that directo
 
 View installer-service or integration-container logs.
 
+![Logs](docs/screenshots/logs.png)
+
 - Live follow
 - Text and regular-expression search
 - Severity filters
@@ -151,7 +163,11 @@ View installer-service or integration-container logs.
 
 View recorded installer events such as installs, updates, registrations, removals, settings changes, and maintenance operations.
 
+![Activity](docs/screenshots/activity.png)
+
 ### Health
+
+![Health](docs/screenshots/health.png)
 
 Displays:
 
@@ -161,6 +177,8 @@ Displays:
 - Installer process, registry, job, and error statistics
 
 ### Settings
+
+![Settings](docs/screenshots/settings.png)
 
 Configure:
 
@@ -374,3 +392,4 @@ http://<host-ip>:8900/docs
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
