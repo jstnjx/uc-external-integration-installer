@@ -1484,17 +1484,54 @@ def _prepare_config_directory(image: str, cfg: Path, job: Job) -> None:
     uid, gid, user_spec = _image_runtime_user(image)
 
     try:
-        # Existing installs may already contain files created as root. Reassign
-        # the full tree so atomic writes and later updates work consistently.
+        image_declares_user = user_spec != "root (image default)"
+
         for root, dirs, files in os.walk(cfg):
             root_path = Path(root)
-            os.chown(root_path, uid, gid)
+
+            if image_declares_user:
+                os.chown(root_path, uid, gid)
+
+            os.chmod(root_path, 0o750 if image_declares_user else 0o777)
+
             for name in dirs:
-                os.chown(root_path / name, uid, gid, follow_symlinks=False)
+                path = root_path / name
+
+                if image_declares_user:
+                    os.chown(path, uid, gid, follow_symlinks=False)
+
+                os.chmod(path, 0o750 if image_declares_user else 0o777)
+
             for name in files:
-                os.chown(root_path / name, uid, gid, follow_symlinks=False)
-        os.chown(cfg, uid, gid)
-        os.chmod(cfg, 0o750)
+                path = root_path / name
+
+                if image_declares_user:
+                    os.chown(path, uid, gid, follow_symlinks=False)
+
+                os.chmod(path, 0o640 if image_declares_user else 0o666)
+
+        if image_declares_user:
+            os.chown(cfg, uid, gid)
+
+        os.chmod(cfg, 0o750 if image_declares_user else 0o777)
+
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"Cannot prepare {cfg} for the integration container. "
+            "The installer service does not have permission to update the "
+            "integration configuration directory."
+        ) from exc
+
+    if image_declares_user:
+        job.log(
+            f"Prepared config directory for image user "
+            f"{user_spec} ({uid}:{gid})"
+        )
+    else:
+        job.log(
+            "The image does not declare a runtime user. "
+            "Prepared the config directory for an entrypoint-managed user."
+        )
     except PermissionError as exc:
         raise RuntimeError(
             f"Cannot prepare {cfg} for container user {uid}:{gid}. "
