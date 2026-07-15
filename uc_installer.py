@@ -1479,66 +1479,62 @@ def _image_runtime_user(image: str) -> tuple[int, int, str]:
 
 
 def _prepare_config_directory(image: str, cfg: Path, job: Job) -> None:
-    """Make a bind-mounted config directory writable by the image user."""
+    """Make a bind-mounted config directory writable by the runtime process.
+
+    Images that declare a non-root Docker USER can be prepared using that exact
+    UID/GID. Some images declare no user (or explicitly use root) and then drop
+    privileges from their entrypoint. Docker metadata cannot reveal the final
+    UID in that case, so the config tree must be writable by the entrypoint-
+    managed user.
+    """
     cfg.mkdir(parents=True, exist_ok=True)
     uid, gid, user_spec = _image_runtime_user(image)
+    entrypoint_managed_user = uid == 0 and gid == 0
 
     try:
-        image_declares_user = user_spec != "root (image default)"
-
         for root, dirs, files in os.walk(cfg):
             root_path = Path(root)
 
-            if image_declares_user:
+            if entrypoint_managed_user:
+                # The image starts as root but may switch to an unknown UID/GID.
+                # Directory write permission is required for atomic temp files
+                # such as /config/settings.json.tmp.
+                os.chmod(root_path, 0o777)
+            else:
                 os.chown(root_path, uid, gid)
-
-            os.chmod(root_path, 0o750 if image_declares_user else 0o777)
+                os.chmod(root_path, 0o750)
 
             for name in dirs:
                 path = root_path / name
-
-                if image_declares_user:
+                if entrypoint_managed_user:
+                    os.chmod(path, 0o777, follow_symlinks=False)
+                else:
                     os.chown(path, uid, gid, follow_symlinks=False)
-
-                os.chmod(path, 0o750 if image_declares_user else 0o777)
+                    os.chmod(path, 0o750, follow_symlinks=False)
 
             for name in files:
                 path = root_path / name
-
-                if image_declares_user:
+                if entrypoint_managed_user:
+                    os.chmod(path, 0o666, follow_symlinks=False)
+                else:
                     os.chown(path, uid, gid, follow_symlinks=False)
+                    os.chmod(path, 0o640, follow_symlinks=False)
 
-                os.chmod(path, 0o640 if image_declares_user else 0o666)
-
-        if image_declares_user:
+        if entrypoint_managed_user:
+            os.chmod(cfg, 0o777)
+            job.log(
+                "Image starts as root and may drop privileges in its entrypoint; "
+                "prepared the config directory for the runtime user"
+            )
+        else:
             os.chown(cfg, uid, gid)
-
-        os.chmod(cfg, 0o750 if image_declares_user else 0o777)
-
+            os.chmod(cfg, 0o750)
+            job.log(f"Prepared config directory for image user {user_spec} ({uid}:{gid})")
     except PermissionError as exc:
         raise RuntimeError(
             f"Cannot prepare {cfg} for the integration container. "
-            "The installer service does not have permission to update the "
-            "integration configuration directory."
+            "The installer service must have permission to update its data directory."
         ) from exc
-
-    if image_declares_user:
-        job.log(
-            f"Prepared config directory for image user "
-            f"{user_spec} ({uid}:{gid})"
-        )
-    else:
-        job.log(
-            "The image does not declare a runtime user. "
-            "Prepared the config directory for an entrypoint-managed user."
-        )
-    except PermissionError as exc:
-        raise RuntimeError(
-            f"Cannot prepare {cfg} for container user {uid}:{gid}. "
-            "The installer service must have permission to change ownership of its data directory."
-        ) from exc
-
-    job.log(f"Prepared config directory for image user {user_spec} ({uid}:{gid})")
 
 
 def _run_container(
