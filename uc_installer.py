@@ -1376,6 +1376,134 @@ def _build_image(entry: dict[str, Any], job: Job,
     )
 
 
+
+def _container_file_text(container, path: str) -> str:
+    """Read a small text file from a created container without starting it."""
+    try:
+        stream, _ = container.get_archive(path)
+        data = b"".join(stream)
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
+            member = next((m for m in archive.getmembers() if m.isfile()), None)
+            if member is None:
+                return ""
+            extracted = archive.extractfile(member)
+            return extracted.read().decode("utf-8", errors="replace") if extracted else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _image_runtime_user(image: str) -> tuple[int, int, str]:
+    """Resolve the image's configured runtime user to a numeric UID/GID.
+
+    Docker image metadata may contain a numeric user (``1000:1000``), a named
+    user (``node``), or a mixed form. Named values are resolved from the image's
+    own /etc/passwd and /etc/group files using a temporary, never-started
+    container so this also works when the image has no shell.
+    """
+    client = get_docker()
+    img = client.images.get(image)
+    user_spec = str((img.attrs.get("Config") or {}).get("User") or "").strip()
+    if not user_spec:
+        return 0, 0, "root (image default)"
+
+    user_part, sep, group_part = user_spec.partition(":")
+    passwd_text = ""
+    group_text = ""
+    temp = None
+    try:
+        temp = client.containers.create(image)
+        passwd_text = _container_file_text(temp, "/etc/passwd")
+        group_text = _container_file_text(temp, "/etc/group")
+    finally:
+        if temp is not None:
+            try:
+                temp.remove(force=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    passwd_by_name: dict[str, tuple[int, int]] = {}
+    passwd_by_uid: dict[int, tuple[str, int]] = {}
+    for line in passwd_text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split(":")
+        if len(fields) < 4:
+            continue
+        try:
+            uid = int(fields[2])
+            gid = int(fields[3])
+        except ValueError:
+            continue
+        passwd_by_name[fields[0]] = (uid, gid)
+        passwd_by_uid[uid] = (fields[0], gid)
+
+    group_by_name: dict[str, int] = {}
+    for line in group_text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split(":")
+        if len(fields) < 3:
+            continue
+        try:
+            group_by_name[fields[0]] = int(fields[2])
+        except ValueError:
+            continue
+
+    primary_gid: int | None = None
+    if user_part.isdigit():
+        uid = int(user_part)
+        primary_gid = passwd_by_uid.get(uid, ("", uid))[1]
+    else:
+        resolved = passwd_by_name.get(user_part)
+        if resolved is None:
+            raise RuntimeError(
+                f"Image {image} runs as user '{user_part}', but that user could not "
+                "be resolved from the image's /etc/passwd file."
+            )
+        uid, primary_gid = resolved
+
+    if sep and group_part:
+        if group_part.isdigit():
+            gid = int(group_part)
+        else:
+            gid = group_by_name.get(group_part)
+            if gid is None:
+                raise RuntimeError(
+                    f"Image {image} runs as group '{group_part}', but that group could not "
+                    "be resolved from the image's /etc/group file."
+                )
+    else:
+        gid = primary_gid if primary_gid is not None else uid
+
+    return uid, gid, user_spec
+
+
+def _prepare_config_directory(image: str, cfg: Path, job: Job) -> None:
+    """Make a bind-mounted config directory writable by the image user."""
+    cfg.mkdir(parents=True, exist_ok=True)
+    uid, gid, user_spec = _image_runtime_user(image)
+
+    try:
+        # Existing installs may already contain files created as root. Reassign
+        # the full tree so atomic writes and later updates work consistently.
+        for root, dirs, files in os.walk(cfg):
+            root_path = Path(root)
+            os.chown(root_path, uid, gid)
+            for name in dirs:
+                os.chown(root_path / name, uid, gid, follow_symlinks=False)
+            for name in files:
+                os.chown(root_path / name, uid, gid, follow_symlinks=False)
+        os.chown(cfg, uid, gid)
+        os.chmod(cfg, 0o750)
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"Cannot prepare {cfg} for container user {uid}:{gid}. "
+            "The installer service must have permission to change ownership of its data directory."
+        ) from exc
+
+    job.log(f"Prepared config directory for image user {user_spec} ({uid}:{gid})")
+
+
 def _run_container(
     entry: dict[str, Any], instance_id: str, ordinal: int, image: str, source: str,
     port: int, extra_env: dict[str, str], entrypoint: str | None, job: Job,
@@ -1383,7 +1511,7 @@ def _run_container(
 ):
     integration_id = entry["id"]
     cfg = CONFIG_DIR / instance_id
-    cfg.mkdir(parents=True, exist_ok=True)
+    _prepare_config_directory(image, cfg, job)
 
     env = base_environment(port, entrypoint)
     env.update(extra_env or {})
