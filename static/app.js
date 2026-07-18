@@ -165,7 +165,7 @@ function renderBrowse() {
     const chips = (it.features || []).slice(0, 4).map(f => '<span class="chip">' + esc(f) + '</span>').join('');
     let action;
     if (!it.installable) action = '<span class="hint" style="margin:0">' +
-      (it.official ? 'Official — runs on the remote, not here' : 'Bundled first-party — not installable here') + '</span>';
+      (it.official ? 'Official — no public standalone repository is available' : 'No installable repository is available') + '</span>';
     else if (isInstalled) action = '<button class="btn btn-line btn-sm" onclick="addInstance(\'' + it.id + '\')">+ Instance</button>' +
       '<button class="btn btn-line btn-sm" onclick="switchTab(\'installed\')">Manage</button>';
     else action = '<button class="btn btn-primary btn-sm" onclick="openInstall(\'' + it.id + '\')">Install</button>';

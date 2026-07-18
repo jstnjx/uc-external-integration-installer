@@ -49,6 +49,8 @@ from pydantic import BaseModel
 # Configuration
 # ---------------------------------------------------------------------------
 
+APP_VERSION = "1.0.4"
+
 REGISTRY_URL = os.environ.get(
     "UC_REGISTRY_URL",
     "https://raw.githubusercontent.com/JackJPowell/uc-intg-list/refs/heads/main/registry.json",
@@ -72,7 +74,7 @@ LABEL_ID = "uc.integration.id"
 LABEL_INSTANCE = "uc.instance.id"
 LABEL_ORDINAL = "uc.instance.ordinal"
 LABEL_NAME = "uc.integration.name"
-LABEL_SOURCE = "uc.integration.source"  # "ghcr" or "build"
+LABEL_SOURCE = "uc.integration.source"  # "image", "build", or "official-build"
 LABEL_PORT = "uc.integration.port"
 
 ALERT_WEBHOOK = os.environ.get("UC_INSTALLER_ALERT_WEBHOOK", "").strip()
@@ -104,10 +106,11 @@ def _resolve_data_dir() -> Path:
 DATA_DIR = _resolve_data_dir()
 APPS_DIR = DATA_DIR / "apps"
 CONFIG_DIR = DATA_DIR / "config"
+RUNTIME_DATA_DIR = DATA_DIR / "integration-data"
 STATE_FILE = DATA_DIR / "state.json"
 EVENTS_FILE = DATA_DIR / "events.jsonl"
 REGISTRY_CACHE = DATA_DIR / "registry.json"
-for d in (APPS_DIR, CONFIG_DIR):
+for d in (APPS_DIR, CONFIG_DIR, RUNTIME_DATA_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # Serializes source builds/installs (the "install queue") so concurrent installs
@@ -680,14 +683,97 @@ def registry_commit() -> str | None:
 
 PLACEHOLDER_REPO = "https://github.com/unfoldedcircle/"
 
+# Official integrations use the same Integration API as community integrations,
+# but their repositories are primarily packaged for the Remote firmware. These
+# profiles describe the small adaptations required for a standalone Docker build.
+# Registry entries may override/extend a profile with an ``external_runtime`` map.
+OFFICIAL_INTEGRATION_PROFILES: dict[str, dict[str, Any]] = {
+    "uc-intg-hass": {
+        "driver_id": "hass_external",
+        "skip_repo_dockerfile": True,
+        "patch_driver_metadata": True,
+    },
+    "uc-intg-denonavr": {
+        "driver_id": "denonavr_external",
+        "python_image": "python:3.11-slim",
+        "patch_driver_metadata": True,
+    },
+    "uc-intg-androidtv": {
+        "driver_id": "androidtv_external",
+        "python_image": "python:3.11-slim",
+        "patch_driver_metadata": True,
+        "environment": {"UC_DATA_HOME": "/data"},
+        "persistent_mounts": [{"name": "data", "target": "/data"}],
+    },
+    "uc-intg-appletv": {
+        "driver_id": "appletv_external",
+        "python_image": "python:3.11-slim",
+        "patch_driver_metadata": True,
+    },
+    "integration-globalcache": {
+        "driver_id": "uc_gc_external_driver",
+        "patch_driver_metadata": True,
+    },
+    "integration-roon": {
+        "driver_id": "uc_roon_external_driver",
+        "patch_driver_metadata": True,
+    },
+}
+
+OFFICIAL_PROFILE_BY_REPOSITORY = {
+    "unfoldedcircle/integration-home-assistant": "uc-intg-hass",
+    "unfoldedcircle/integration-denonavr": "uc-intg-denonavr",
+    "unfoldedcircle/integration-androidtv": "uc-intg-androidtv",
+    "unfoldedcircle/integration-appletv": "uc-intg-appletv",
+    "unfoldedcircle/integration-globalcache": "integration-globalcache",
+    "unfoldedcircle/integration-roon": "integration-roon",
+}
+
+
+def external_runtime_profile(entry: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the standalone-container runtime profile for a registry entry."""
+    if not entry:
+        return {}
+    entry_id = str(entry.get("id") or "")
+    repository = re.sub(r"^https?://github\.com/", "", str(entry.get("repository") or "").strip())
+    repository = re.sub(r"\.git$", "", repository).rstrip("/").lower()
+    profile_id = entry_id if entry_id in OFFICIAL_INTEGRATION_PROFILES else OFFICIAL_PROFILE_BY_REPOSITORY.get(repository, "")
+    profile = dict(OFFICIAL_INTEGRATION_PROFILES.get(profile_id, {}))
+    known_official = bool(profile)
+    builtin_env = dict(profile.get("environment") or {})
+    supplied = entry.get("external_runtime")
+    if isinstance(supplied, dict):
+        profile.update(supplied)
+        supplied_env = supplied.get("environment")
+        if isinstance(supplied_env, dict):
+            builtin_env.update({str(k): str(v) for k, v in supplied_env.items()})
+    if entry.get("official") or known_official:
+        # External official drivers are registered explicitly. Publishing the
+        # firmware driver id over mDNS would collide with the built-in driver.
+        builtin_env.setdefault("UC_DISABLE_MDNS_PUBLISH", "true")
+        raw_driver_id = str(entry.get("driver_id") or entry.get("id") or "official")
+        profile.setdefault("driver_id", f"{raw_driver_id}_external")
+        profile.setdefault("patch_driver_metadata", True)
+    if builtin_env:
+        profile["environment"] = builtin_env
+    return profile
+
+
+def entry_base_driver_id(entry: dict[str, Any]) -> str:
+    profile = external_runtime_profile(entry)
+    return str(profile.get("driver_id") or entry.get("driver_id") or entry.get("id") or "integration")
+
 
 def is_installable(entry: dict[str, Any]) -> bool:
-    # Official (first-party) integrations are meant to run on the remote itself,
-    # not as external containers — never installable here.
-    if entry.get("official"):
-        return False
     repo = (entry.get("repository") or "").strip()
-    return bool(repo) and repo != PLACEHOLDER_REPO and repo.startswith("http")
+    if not repo or not repo.startswith(("http://", "https://")):
+        return False
+    # Placeholder official entries point only at the organization and have no
+    # public source repository to build.
+    if repo.rstrip("/") == PLACEHOLDER_REPO.rstrip("/"):
+        return False
+    owner, name = owner_repo(repo)
+    return bool(owner and name)
 
 
 def image_from_repo(repo: str, tag: str = "latest") -> str:
@@ -703,6 +789,33 @@ def owner_repo(repo: str) -> tuple[str, str]:
     r = re.sub(r"\.git$", "", r)
     parts = r.split("/")
     return (parts[0], parts[1]) if len(parts) >= 2 else ("", r)
+
+
+def image_candidate_for_entry(entry: dict[str, Any], tag: str = "latest") -> str | None:
+    """Resolve a prebuilt image when one is safe to use.
+
+    Official source builds patch driver metadata to a distinct external id, so a
+    generic firmware image cannot be used unless the registry explicitly marks a
+    prebuilt image as standalone-ready.
+    """
+    profile = external_runtime_profile(entry)
+    configured = profile.get("docker_image") or entry.get("docker_image")
+    if configured:
+        if profile.get("patch_driver_metadata") and not profile.get("prebuilt_standalone"):
+            return None
+        if profile.get("latest_only") and (tag or "latest") != "latest":
+            return None
+        arches = profile.get("image_arches")
+        if arches:
+            host = platform.machine().lower()
+            normalized = "amd64" if host in ("x86_64", "amd64") else "arm64" if host in ("aarch64", "arm64") else host
+            if normalized not in {str(a).lower() for a in arches}:
+                return None
+        image = str(configured).replace("{version}", tag or "latest")
+        return image
+    if entry.get("official") or profile.get("patch_driver_metadata"):
+        return None
+    return image_from_repo(str(entry.get("repository") or ""), tag)
 
 
 # ---- integration versions (GitHub releases / tags) -------------------------
@@ -824,7 +937,8 @@ def _container_for(integration_id: str):
         return None
 
 
-def base_environment(port: int, entrypoint: str | None) -> dict[str, str]:
+def base_environment(port: int, entrypoint: str | None,
+                     entry: dict[str, Any] | None = None) -> dict[str, str]:
     env = {
         "UC_CONFIG_HOME": "/config",
         "UC_INTEGRATION_INTERFACE": "0.0.0.0",
@@ -832,6 +946,8 @@ def base_environment(port: int, entrypoint: str | None) -> dict[str, str]:
         "UC_DISABLE_MDNS_PUBLISH": "false",
         "PYTHONUNBUFFERED": "1",
     }
+    profile_env = external_runtime_profile(entry).get("environment") or {}
+    env.update({str(k): str(v) for k, v in profile_env.items()})
     if entrypoint:
         # Only set for the generic source build; makes package-relative imports
         # resolve regardless of where the entrypoint file lives in the tree.
@@ -934,7 +1050,7 @@ def reconcile_state() -> None:
             "instance_id": instance_id, "id": instance_id, "integration_id": integration_id,
             "instance": ordinal, "name": name, "label": instance_label(name, ordinal),
             "driver_id": instance_driver_id(
-                (find_integration(integration_id) or {}).get("driver_id") or integration_id, ordinal),
+                entry_base_driver_id(find_integration(integration_id) or {"id": integration_id}), ordinal),
             "repository": (find_integration(integration_id) or {}).get("repository", ""),
             "image": image, "source": labels.get(LABEL_SOURCE, "unknown"), "port": port,
             "env": {}, "entrypoint": "", "version": "latest", "stack": None,
@@ -950,7 +1066,7 @@ def reconcile_state() -> None:
 
 # ---- source build helpers --------------------------------------------------
 
-GENERIC_DOCKERFILE = """FROM python:3.12-slim
+GENERIC_DOCKERFILE = """FROM __PYTHON_IMAGE__
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
@@ -963,7 +1079,7 @@ WORKDIR /app
 COPY . /app
 
 RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-RUN if [ -f pyproject.toml ]; then pip install .; fi
+RUN if [ -f pyproject.toml ] && grep -Eq '^\\[(build-system|project)\\]' pyproject.toml; then pip install .; fi
 
 COPY docker-entry.external.sh /usr/local/bin/docker-entry.external.sh
 RUN chmod +x /usr/local/bin/docker-entry.external.sh
@@ -1021,7 +1137,7 @@ def detect_entrypoint(app_dir: Path) -> str:
 # UC_* env vars at runtime (passed by the container), so no per-language env is
 # needed — only the build toolchain and the start command differ.
 
-NODE_DOCKERFILE = r"""FROM node:20-slim
+NODE_DOCKERFILE = r"""FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . /app
@@ -1073,12 +1189,19 @@ echo "No runnable .NET entry found in /out. Contents:"; ls -la
 exit 1
 """
 
-RUST_DOCKERFILE = r"""FROM rust:slim
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUST_DOCKERFILE = r"""FROM rust:slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates pkg-config libssl-dev clang cmake protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . /app
-RUN cargo build --release
-CMD ["sh","-c","BIN=$(find target/release -maxdepth 1 -type f -executable ! -name '*.d' | head -1); echo \"Starting $BIN\"; exec \"$BIN\""]
+RUN cargo build --release && mkdir -p /out && \
+    BIN_NAME=$(sed -n 's/^default-run[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' Cargo.toml | head -1) && \
+    if [ -n "$BIN_NAME" ] && [ -x "target/release/$BIN_NAME" ]; then BIN="target/release/$BIN_NAME"; else BIN=$(find target/release -maxdepth 1 -type f -executable ! -name '*.d' | head -1); fi && \
+    test -n "$BIN" && cp "$BIN" /out/driver
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/driver /usr/local/bin/driver
+CMD ["/usr/local/bin/driver"]
 """
 
 GO_DOCKERFILE = r"""FROM golang:alpine AS build
@@ -1150,27 +1273,39 @@ def detect_stack(app_dir: Path) -> str:
 
 
 def clone_or_update(repo: str, app_dir: Path, log, ref: str | None = None) -> None:
-    pinned = ref and ref != "latest"
+    pinned = bool(ref and ref != "latest")
     if pinned:
-        # fresh checkout of a specific tag/branch
         shutil.rmtree(app_dir, ignore_errors=True)
         log(f"Cloning {repo} at {ref} ...")
         app_dir.parent.mkdir(parents=True, exist_ok=True)
-        r = subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", ref, repo, str(app_dir)]
+        result = subprocess.run(
+            ["git", "clone", "--recurse-submodules", "--depth", "1", "--branch", str(ref), repo, str(app_dir)]
         )
-        if r.returncode != 0:  # ref may be a non-branch/tag; clone then checkout
-            subprocess.run(["git", "clone", "--depth", "1", repo, str(app_dir)], check=True)
-            subprocess.run(["git", "-C", str(app_dir), "fetch", "--depth", "1", "origin", ref], check=False)
-            subprocess.run(["git", "-C", str(app_dir), "checkout", ref], check=True)
-        return
-    if (app_dir / ".git").exists():
+        if result.returncode != 0:
+            # The ref may be a commit rather than a tag/branch.
+            shutil.rmtree(app_dir, ignore_errors=True)
+            subprocess.run(
+                ["git", "clone", "--recurse-submodules", "--depth", "1", repo, str(app_dir)], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(app_dir), "fetch", "--depth", "1", "origin", str(ref)], check=False
+            )
+            subprocess.run(["git", "-C", str(app_dir), "checkout", str(ref)], check=True)
+    elif (app_dir / ".git").exists():
         log(f"Updating source in {app_dir.name} ...")
         subprocess.run(["git", "-C", str(app_dir), "pull", "--ff-only"], check=False)
     else:
         log(f"Cloning {repo} ...")
         app_dir.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", "--depth", "1", repo, str(app_dir)], check=True)
+        subprocess.run(
+            ["git", "clone", "--recurse-submodules", "--depth", "1", repo, str(app_dir)], check=True
+        )
+
+    # Several first-party integrations depend on git submodules or git-pinned
+    # packages. Keep them initialized after both clone and update operations.
+    subprocess.run(
+        ["git", "-C", str(app_dir), "submodule", "update", "--init", "--recursive"], check=False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1252,8 +1387,15 @@ def _pull_image(image: str, job: Job) -> bool:
         return False
 
 
-def _find_repo_dockerfile(app_dir: Path) -> str | None:
-    """Return a repo-relative path to the project's own Dockerfile, if any."""
+def _find_repo_dockerfile(app_dir: Path, entry: dict[str, Any] | None = None) -> str | None:
+    """Return a usable repo-relative Dockerfile path, if the project ships one."""
+    profile = external_runtime_profile(entry)
+    if profile.get("skip_repo_dockerfile"):
+        return None
+    explicit = profile.get("dockerfile")
+    if explicit:
+        candidate = str(explicit)
+        return candidate if (app_dir / candidate).exists() else None
     for candidate in ("Dockerfile", "docker/Dockerfile", "Dockerfile.prod"):
         if (app_dir / candidate).exists():
             return candidate
@@ -1292,14 +1434,19 @@ def _build_with_nixpacks(app_dir: Path, tag: str, job: Job) -> None:
         raise RuntimeError(f"nixpacks exited with code {proc.returncode}")
 
 
-def _prepare_stack_build(app_dir: Path, stack: str, job: Job) -> tuple[str | None, str | None]:
-    """Write a tuned Dockerfile for a known stack. Returns (dockerfile, entrypoint)
-    or (None, None) if the stack isn't one we generate a Dockerfile for."""
+def _prepare_stack_build(app_dir: Path, stack: str, job: Job,
+                         entry: dict[str, Any] | None = None) -> tuple[str | None, str | None]:
+    """Write a tuned Dockerfile for a known stack."""
+    profile = external_runtime_profile(entry)
     if stack == "python":
-        (app_dir / "Dockerfile.external").write_text(GENERIC_DOCKERFILE)
+        python_image = str(profile.get("python_image") or "python:3.12-slim")
+        (app_dir / "Dockerfile.external").write_text(
+            GENERIC_DOCKERFILE.replace("__PYTHON_IMAGE__", python_image)
+        )
         (app_dir / "docker-entry.external.sh").write_text(GENERIC_ENTRY)
         entrypoint = detect_entrypoint(app_dir)
         job.log(f"Detected entrypoint: {entrypoint or '(auto at runtime)'}")
+        job.log(f"Using Python runtime image {python_image}")
         return "Dockerfile.external", entrypoint
     if stack == "node":
         (app_dir / "Dockerfile.external").write_text(NODE_DOCKERFILE)
@@ -1320,60 +1467,105 @@ def _prepare_stack_build(app_dir: Path, stack: str, job: Job) -> tuple[str | Non
     return None, None
 
 
-def _build_image(entry: dict[str, Any], job: Job,
-                 version: str = "latest") -> tuple[str, str | None, str]:
-    """Clone + build from source. Returns (image_tag, entrypoint, stack).
+def _patch_driver_metadata(app_dir: Path, driver_id: str, name: str,
+                           job: Job) -> list[tuple[Path, bytes]]:
+    """Patch embedded/runtime driver metadata for an external official build."""
+    candidates: list[Path] = []
+    for path in (app_dir / "driver.json", app_dir / "resources" / "driver.json"):
+        if path.exists():
+            candidates.append(path)
+    for path in app_dir.glob("**/driver.json"):
+        if ".git" not in path.parts and path not in candidates:
+            candidates.append(path)
 
-    Order: the project's own Dockerfile → a tuned build for a known language →
-    Nixpacks (universal, any language) as the catch-all and as a fallback when a
-    tuned build fails. This lets *any* integration build from source when no
-    prebuilt image is available, as long as Nixpacks is installed for the long tail.
-    """
+    backups: list[tuple[Path, bytes]] = []
+    for path in candidates:
+        try:
+            original = path.read_bytes()
+            data = json.loads(original.decode("utf-8"))
+            if not isinstance(data, dict) or "driver_id" not in data:
+                continue
+            data["driver_id"] = driver_id
+            current_name = data.get("name")
+            if isinstance(current_name, dict):
+                current_name["en"] = name
+            elif isinstance(current_name, str):
+                data["name"] = name
+            backups.append((path, original))
+            path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            job.log(f"Prepared {path.relative_to(app_dir)} with external driver id '{driver_id}'")
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            job.log(f"Could not patch {path.relative_to(app_dir)}: {exc}")
+    if not backups:
+        raise RuntimeError(
+            "No patchable driver.json metadata file was found. The official integration "
+            "cannot be assigned a safe external driver id."
+        )
+    return backups
+
+
+def _restore_driver_metadata(backups: list[tuple[Path, bytes]]) -> None:
+    for path, original in backups:
+        try:
+            path.write_bytes(original)
+        except OSError:
+            pass
+
+
+def _build_image(entry: dict[str, Any], job: Job, version: str = "latest",
+                 image_scope: str | None = None, external_driver_id: str | None = None,
+                 external_name: str | None = None) -> tuple[str, str | None, str]:
+    """Clone and build an integration from source."""
     integration_id = entry["id"]
     repo = entry["repository"]
     app_dir = APPS_DIR / integration_id
     clone_or_update(repo, app_dir, job.log, ref=version)
 
     safe = re.sub(r"[^a-z0-9_.-]", "-", (version or "latest").lower())
-    tag = f"uc-local/{integration_id}:{safe}"
+    image_name = re.sub(r"[^a-z0-9_.-]", "-", (image_scope or integration_id).lower())
+    tag = f"uc-local/{image_name}:{safe}"
     client = get_docker()
+    backups: list[tuple[Path, bytes]] = []
+    if external_driver_id:
+        backups = _patch_driver_metadata(
+            app_dir, external_driver_id, external_name or entry.get("name", integration_id), job
+        )
 
-    # 1) the project's own Dockerfile — the author knows the correct build.
-    repo_dockerfile = _find_repo_dockerfile(app_dir)
-    if repo_dockerfile:
-        job.log(f"Using the project's own {repo_dockerfile}. Building {tag} ...")
-        _docker_build(client, app_dir, repo_dockerfile, tag, job)
-        job.log(f"Built {tag}")
-        return tag, None, "dockerfile"
-
-    # 2) tuned build for a known language (UC integrations are mostly these).
-    stack = detect_stack(app_dir)
-    dockerfile, entrypoint = _prepare_stack_build(app_dir, stack, job)
-    if dockerfile is not None:
-        job.log(f"Detected a {stack} project. Building {tag} ...")
-        try:
-            _docker_build(client, app_dir, dockerfile, tag, job)
+    try:
+        repo_dockerfile = _find_repo_dockerfile(app_dir, entry)
+        if repo_dockerfile:
+            job.log(f"Using the project's own {repo_dockerfile}. Building {tag} ...")
+            _docker_build(client, app_dir, repo_dockerfile, tag, job)
             job.log(f"Built {tag}")
-            return tag, entrypoint, stack
-        except Exception as exc:  # noqa: BLE001
-            job.log(f"{stack} build failed: {exc}")
-            if not _nixpacks_available():
-                raise
-            job.log("Retrying with Nixpacks ...")
+            return tag, None, "dockerfile"
 
-    # 3) Nixpacks — universal dynamic build for anything else (or a failed tuned build).
-    if _nixpacks_available():
-        job.log("Building automatically with Nixpacks ...")
-        _build_with_nixpacks(app_dir, tag, job)
-        job.log(f"Built {tag} with Nixpacks")
-        return tag, None, "nixpacks"
+        stack = detect_stack(app_dir)
+        dockerfile, entrypoint = _prepare_stack_build(app_dir, stack, job, entry)
+        if dockerfile is not None:
+            job.log(f"Detected a {stack} project. Building {tag} ...")
+            try:
+                _docker_build(client, app_dir, dockerfile, tag, job)
+                job.log(f"Built {tag}")
+                return tag, entrypoint, stack
+            except Exception as exc:  # noqa: BLE001
+                job.log(f"{stack} build failed: {exc}")
+                if not _nixpacks_available():
+                    raise
+                job.log("Retrying with Nixpacks ...")
 
-    raise RuntimeError(
-        "Couldn't build this integration from source. No Dockerfile was found and "
-        f"the language ({stack}) has no built-in recipe. Install Nixpacks on the host "
-        "for automatic builds of any language (Node, Python, Go, Rust, .NET, Java, PHP, "
-        "Ruby, ...), or add a Dockerfile to the repository."
-    )
+        if _nixpacks_available():
+            job.log("Building automatically with Nixpacks ...")
+            _build_with_nixpacks(app_dir, tag, job)
+            job.log(f"Built {tag} with Nixpacks")
+            return tag, None, "nixpacks"
+
+        raise RuntimeError(
+            "Couldn't build this integration from source. No usable Dockerfile was found and "
+            f"the language ({stack}) has no built-in recipe. Install Nixpacks on the host "
+            "for automatic builds of additional languages, or add a standalone Dockerfile."
+        )
+    finally:
+        _restore_driver_metadata(backups)
 
 
 
@@ -1478,7 +1670,7 @@ def _image_runtime_user(image: str) -> tuple[int, int, str]:
     return uid, gid, user_spec
 
 
-def _prepare_config_directory(image: str, cfg: Path, job: Job) -> None:
+def _prepare_writable_directory(image: str, cfg: Path, job: Job, label: str = "config") -> None:
     """Make a bind-mounted config directory writable by the runtime process.
 
     Images that declare a non-root Docker USER can be prepared using that exact
@@ -1524,17 +1716,90 @@ def _prepare_config_directory(image: str, cfg: Path, job: Job) -> None:
             os.chmod(cfg, 0o777)
             job.log(
                 "Image starts as root and may drop privileges in its entrypoint; "
-                "prepared the config directory for the runtime user"
+                f"prepared the {label} directory for the runtime user"
             )
         else:
             os.chown(cfg, uid, gid)
             os.chmod(cfg, 0o750)
-            job.log(f"Prepared config directory for image user {user_spec} ({uid}:{gid})")
+            job.log(f"Prepared {label} directory for image user {user_spec} ({uid}:{gid})")
     except PermissionError as exc:
         raise RuntimeError(
             f"Cannot prepare {cfg} for the integration container. "
             "The installer service must have permission to update its data directory."
         ) from exc
+
+
+def _prepare_config_directory(image: str, cfg: Path, job: Job) -> None:
+    _prepare_writable_directory(image, cfg, job, "config")
+
+
+def _runtime_volumes(entry: dict[str, Any], instance_id: str, image: str,
+                     job: Job) -> dict[str, dict[str, str]]:
+    volumes: dict[str, dict[str, str]] = {}
+    mounts = external_runtime_profile(entry).get("persistent_mounts") or []
+    if not isinstance(mounts, list):
+        return volumes
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            continue
+        name = re.sub(r"[^a-zA-Z0-9_.-]", "-", str(mount.get("name") or "data"))
+        target = str(mount.get("target") or "").strip()
+        if not target.startswith("/"):
+            continue
+        host_path = RUNTIME_DATA_DIR / instance_id / name
+        _prepare_writable_directory(image, host_path, job, name)
+        volumes[str(host_path)] = {"bind": target, "mode": str(mount.get("mode") or "rw")}
+    return volumes
+
+
+def _startup_logs(container) -> str:
+    try:
+        data = container.logs(tail=80, stdout=True, stderr=True)
+        if isinstance(data, bytes):
+            return data.decode("utf-8", errors="replace").strip()
+        return str(data).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _verify_container_started(container, job: Job, timeout: float = 6.0) -> None:
+    """Fail an install when the new container immediately exits or restart-loops."""
+    deadline = time.time() + timeout
+    running_since: float | None = None
+    last_status = "created"
+    restart_count = 0
+    while time.time() < deadline:
+        container.reload()
+        last_status = str(container.status or "unknown")
+        restart_count = int(container.attrs.get("RestartCount", 0) or 0)
+        if last_status == "running":
+            running_since = running_since or time.time()
+            if time.time() - running_since >= 2.0 and restart_count <= 1:
+                job.log("Container startup check passed")
+                return
+        else:
+            running_since = None
+        time.sleep(0.4)
+
+    container.reload()
+    last_status = str(container.status or last_status)
+    restart_count = int(container.attrs.get("RestartCount", restart_count) or 0)
+    if last_status == "running" and restart_count <= 1:
+        job.log("Container startup check passed")
+        return
+
+    logs = _startup_logs(container)
+    if logs:
+        job.log("Container startup failed. Last container output:")
+        for line in logs.splitlines()[-80:]:
+            job.log(f"  {line}")
+    try:
+        container.remove(force=True)
+    except Exception:  # noqa: BLE001
+        pass
+    raise RuntimeError(
+        f"container did not remain running (status={last_status}, restarts={restart_count})"
+    )
 
 
 def _run_container(
@@ -1546,32 +1811,38 @@ def _run_container(
     cfg = CONFIG_DIR / instance_id
     _prepare_config_directory(image, cfg, job)
 
-    env = base_environment(port, entrypoint)
-    env.update(extra_env or {})
+    env = base_environment(port, entrypoint, entry)
+    env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
 
     existing = _container_for(instance_id)
     if existing is not None:
         job.log("Removing previous container ...")
         existing.remove(force=True)
 
-    base_driver = entry.get("driver_id") or integration_id
+    base_driver = entry_base_driver_id(entry)
     driver_id = instance_driver_id(base_driver, ordinal)
     name = entry.get("name", integration_id)
     label = instance_label(name, ordinal)
 
+    volumes = {str(cfg): {"bind": "/config", "mode": "rw"}}
+    volumes.update(_runtime_volumes(entry, instance_id, image, job))
+
     run_kwargs: dict[str, Any] = {}
     if platform:
         run_kwargs["platform"] = platform
+    command = external_runtime_profile(entry).get("command")
+    if command:
+        run_kwargs["command"] = command
 
     job.log(f"Starting container '{instance_id}' on port {port} ...")
-    get_docker().containers.run(
+    container = get_docker().containers.run(
         image,
         name=instance_id,
         detach=True,
         network_mode="host",
         restart_policy={"Name": "on-failure", "MaximumRetryCount": 5},
         environment=env,
-        volumes={str(cfg): {"bind": "/config", "mode": "rw"}},
+        volumes=volumes,
         labels={
             LABEL_MANAGED: "managed",
             LABEL_ID: integration_id,
@@ -1583,6 +1854,7 @@ def _run_container(
         },
         **run_kwargs,
     )
+    _verify_container_started(container, job)
 
     prev = load_state()["integrations"].get(instance_id, {})
     record_integration({
@@ -1601,6 +1873,7 @@ def _run_container(
         "entrypoint": entrypoint or "",
         "version": version or "latest",
         "stack": stack if stack is not None else prev.get("stack"),
+        "official": bool(entry.get("official") or external_runtime_profile(entry).get("patch_driver_metadata")),
         "auto_update": prev.get("auto_update", False),
         "installed_at": prev.get("installed_at") or datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -1617,10 +1890,15 @@ def do_install(entry: dict[str, Any], instance_id: str, ordinal: int, port: int,
             job.log("Another install is in progress — queued, waiting ...")
         with _install_lock:
             version = version or "latest"
+            profile = external_runtime_profile(entry)
+            patch_metadata = bool(profile.get("patch_driver_metadata"))
+            base_driver = entry_base_driver_id(entry)
+            driver_id = instance_driver_id(base_driver, ordinal)
+            label = instance_label(entry.get("name", entry["id"]), ordinal)
 
-            # Additional instances of an already-installed integration reuse the
-            # sibling's resolved image/stack — no re-pull or rebuild, same stack.
-            if reuse:
+            # Metadata-patched official images are instance-specific because each
+            # external driver id must remain unique on the Remote.
+            if reuse and not patch_metadata:
                 sib = next((r for iid, r in load_state()["integrations"].items()
                             if iid != instance_id
                             and r.get("integration_id") == entry["id"]
@@ -1629,19 +1907,26 @@ def do_install(entry: dict[str, Any], instance_id: str, ordinal: int, port: int,
                 if sib:
                     job.log(f"Reusing image {sib['image']} from {sib.get('label', sib['id'])} "
                             f"({sib.get('source')})")
-                    _run_container(entry, instance_id, ordinal, sib["image"], sib.get("source", "ghcr"),
+                    _run_container(entry, instance_id, ordinal, sib["image"], sib.get("source", "image"),
                                    port, extra_env, sib.get("entrypoint") or None, job, version,
                                    sib.get("stack"))
                     job.finish("success")
                     return
 
-            image = image_from_repo(entry["repository"], version)
-            source = "ghcr"
+            image = image_candidate_for_entry(entry, version)
+            source = "image"
             entrypoint = None
             stack = None
-            if not _pull_image(image, job):
-                image, entrypoint, stack = _build_image(entry, job, version)
-                source = "build"
+            if not image or not _pull_image(image, job):
+                if not image:
+                    job.log("No standalone prebuilt image is configured; building from source")
+                image, entrypoint, stack = _build_image(
+                    entry, job, version,
+                    image_scope=instance_id if patch_metadata else None,
+                    external_driver_id=driver_id if patch_metadata else None,
+                    external_name=label if patch_metadata else None,
+                )
+                source = "official-build" if patch_metadata else "build"
             _run_container(entry, instance_id, ordinal, image, source, port,
                            extra_env, entrypoint, job, version, stack)
         job.finish("success")
@@ -1657,6 +1942,7 @@ def do_reconfigure(rec: dict[str, Any], port: int, extra_env: dict[str, str], jo
         entry = find_integration(integration_id) or {
             "id": integration_id, "name": rec.get("name", integration_id),
             "repository": rec.get("repository", ""), "driver_id": rec.get("driver_id"),
+            "official": rec.get("official", False),
         }
         image = rec.get("image") or image_from_repo(rec.get("repository", ""))
         source = rec.get("source", "ghcr")
@@ -2022,7 +2308,7 @@ def require_token(authorization: str | None = Header(default=None),
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="UC External Integration Installer", version="1.0.0")
+app = FastAPI(title="UC External Integration Installer", version=APP_VERSION)
 
 
 @app.get("/api/health")
@@ -2176,7 +2462,7 @@ def api_registry(refresh: bool = False) -> dict[str, Any]:
             "custom": it.get("custom", False),
             "installable": is_installable(it),
             "installed": it.get("id") in installed,
-            "image_candidate": image_from_repo(it["repository"]) if is_installable(it) else None,
+            "image_candidate": image_candidate_for_entry(it) if is_installable(it) else None,
         })
     return {
         "version": data.get("version"),
@@ -2344,6 +2630,7 @@ def api_remove(instance_id: str, purge: bool = False):
     forget_integration(instance_id)
     if purge:
         shutil.rmtree(CONFIG_DIR / instance_id, ignore_errors=True)
+        shutil.rmtree(RUNTIME_DATA_DIR / instance_id, ignore_errors=True)
         # only drop the shared source clone when no sibling instances remain
         if not integration_instances(integration_id):
             shutil.rmtree(APPS_DIR / integration_id, ignore_errors=True)
@@ -3163,6 +3450,8 @@ def api_backup():
             tar.add(str(STATE_FILE), arcname="state.json")
         if CONFIG_DIR.exists():
             tar.add(str(CONFIG_DIR), arcname="config")
+        if RUNTIME_DATA_DIR.exists():
+            tar.add(str(RUNTIME_DATA_DIR), arcname="integration-data")
     buf.seek(0)
     fn = "uc-installer-backup-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".tar.gz"
     return StreamingResponse(
@@ -3179,9 +3468,11 @@ async def api_restore(file: UploadFile = File(...)) -> dict[str, Any]:
             _safe_extract(tar, DATA_DIR, only="state.json")
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
             _safe_extract(tar, DATA_DIR, only="config")
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+            _safe_extract(tar, DATA_DIR, only="integration-data")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"Invalid backup archive: {exc}")
-    record_event("state", None, "restored config + state from backup")
+    record_event("state", None, "restored config, integration data, and state from backup")
     return {"status": "restored", "note": "Rebuild instances to recreate their containers."}
 
 
@@ -3198,6 +3489,9 @@ def api_instance_backup(instance_id: str):
         tar.addfile(ti, io.BytesIO(meta))
         if cfg.exists():
             tar.add(str(cfg), arcname=f"{instance_id}/config")
+        runtime_data = RUNTIME_DATA_DIR / instance_id
+        if runtime_data.exists():
+            tar.add(str(runtime_data), arcname=f"{instance_id}/integration-data")
     buf.seek(0)
     fn = f"{instance_id}-backup-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".tar.gz"
     return StreamingResponse(
@@ -3211,25 +3505,35 @@ async def api_instance_restore(instance_id: str, file: UploadFile = File(...)) -
     if instance_id not in load_state()["integrations"]:
         raise HTTPException(404, "Instance is not installed")
     data = await file.read()
-    dest = CONFIG_DIR / instance_id
-    dest.mkdir(parents=True, exist_ok=True)
+    destinations = {
+        "config": CONFIG_DIR / instance_id,
+        "integration-data": RUNTIME_DATA_DIR / instance_id,
+    }
+    for dest in destinations.values():
+        dest.mkdir(parents=True, exist_ok=True)
     try:
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
-            members = [m for m in tar.getmembers() if "config/" in m.name or m.name.endswith("/config")]
-            base = dest.resolve()
-            for m in members:
-                # strip everything up to and including the "config/" segment
-                rel = m.name.split("config/", 1)[1] if "config/" in m.name else ""
-                if not rel:
-                    continue
-                target = (dest / rel).resolve()
-                if not str(target).startswith(str(base)):
-                    continue
-                m.name = rel
-                tar.extract(m, dest)
+            for section, dest in destinations.items():
+                base = dest.resolve()
+                marker = section + "/"
+                for member in tar.getmembers():
+                    if marker not in member.name:
+                        continue
+                    rel = member.name.split(marker, 1)[1]
+                    if not rel:
+                        continue
+                    target = (dest / rel).resolve()
+                    if not str(target).startswith(str(base)):
+                        continue
+                    original_name = member.name
+                    try:
+                        member.name = rel
+                        tar.extract(member, dest)
+                    finally:
+                        member.name = original_name
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"Invalid backup archive: {exc}")
-    record_event("state", instance_id, "restored instance config from backup")
+    record_event("state", instance_id, "restored instance config and integration data from backup")
     return {"status": "restored", "note": "Restart or rebuild the instance to apply."}
 
 

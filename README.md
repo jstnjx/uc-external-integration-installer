@@ -30,7 +30,8 @@ The installer provides a browser-based interface for managing integration instan
 ## Features
 
 - Browse and search the external integration registry
-- Install from prebuilt GHCR images or build from source
+- Install from prebuilt container images or build from source
+- Run supported official Unfolded Circle integrations externally in Docker
 - Run multiple instances of the same integration
 - Start, stop, restart, rebuild, configure, and remove integrations
 - Select integration versions and configure update policies
@@ -61,6 +62,19 @@ https://raw.githubusercontent.com/JackJPowell/uc-intg-list/refs/heads/main/regis
 The registry, its entries, and their metadata are maintained separately from this project.
 
 The registry source can be changed in **Settings** or with the `UC_REGISTRY_URL` environment variable.
+
+### Official integrations in Docker
+
+Official integrations with a public source repository can be installed directly; changing
+`official` to `false` is no longer required. The installer builds them as standalone Docker
+images, assigns an external driver ID, disables duplicate mDNS publication, and keeps each
+instance's `/config` data persistent. Integrations that require a separate data directory,
+such as Android TV, receive an additional persistent mount automatically.
+
+Official registry placeholders that only point to the Unfolded Circle organization remain
+unavailable because there is no public repository to build. First-party source builds can be
+larger and take more host resources than pulling a prebuilt community image, particularly the
+Rust-based Home Assistant integration.
 
 ## Installation
 
@@ -264,6 +278,8 @@ uc-external-integration-installer/
 ├── install.sh
 ├── uninstall.sh
 ├── requirements.txt
+├── tests/
+│   └── test_official_integrations.py
 ├── static/
 │   ├── index.html
 │   ├── styles.css
