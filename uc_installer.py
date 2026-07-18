@@ -49,7 +49,7 @@ from pydantic import BaseModel
 # Configuration
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 
 REGISTRY_URL = os.environ.get(
     "UC_REGISTRY_URL",
@@ -696,11 +696,13 @@ OFFICIAL_INTEGRATION_PROFILES: dict[str, dict[str, Any]] = {
     "uc-intg-denonavr": {
         "driver_id": "denonavr_external",
         "python_image": "python:3.11-slim",
+        "python_entrypoint": "intg-denonavr/driver.py",
         "patch_driver_metadata": True,
     },
     "uc-intg-androidtv": {
         "driver_id": "androidtv_external",
         "python_image": "python:3.11-slim",
+        "python_entrypoint": "src/driver.py",
         "patch_driver_metadata": True,
         "environment": {"UC_DATA_HOME": "/data"},
         "persistent_mounts": [{"name": "data", "target": "/data"}],
@@ -708,6 +710,7 @@ OFFICIAL_INTEGRATION_PROFILES: dict[str, dict[str, Any]] = {
     "uc-intg-appletv": {
         "driver_id": "appletv_external",
         "python_image": "python:3.11-slim",
+        "python_entrypoint": "intg-appletv/driver.py",
         "patch_driver_metadata": True,
     },
     "integration-globalcache": {
@@ -1110,24 +1113,61 @@ run_py() {
 if [ -n "${UC_ENTRYPOINT:-}" ] && [ -f "$UC_ENTRYPOINT" ]; then run_py "$UC_ENTRYPOINT"; fi
 if [ -f main.py ]; then run_py main.py; fi
 if [ -f driver.py ]; then run_py driver.py; fi
-FOUND="$(find . -maxdepth 3 -type f -name '*.py' | grep -E '/(main|driver|integration|intg).*\\.py$' | head -n1 || true)"
+FOUND="$(find . -maxdepth 4 -type f -name '*.py' \
+  ! -path './tests/*' ! -path './test/*' ! -path './tools/*' ! -path './scripts/*' \
+  | grep -E '/(driver|main|integration|intg)([-_][^/]*)?\\.py$' \
+  | grep -Ev '/(custom|build|generate|generated|test|setup|release|migrate)[-_]' \
+  | head -n1 || true)"
 if [ -n "$FOUND" ]; then run_py "${FOUND#./}"; fi
 echo "No Python entrypoint found. Set UC_ENTRYPOINT."
 exit 1
 """
 
 
-def detect_entrypoint(app_dir: Path) -> str:
-    for name in ("main.py", "driver.py"):
-        if (app_dir / name).exists():
-            return name
-    candidates = sorted(app_dir.glob("**/*.py"))
-    pat = re.compile(r"(main|driver|integration|intg).*\.py$")
-    for c in candidates:
-        rel = c.relative_to(app_dir)
-        if len(rel.parts) <= 3 and pat.search(rel.name):
-            return str(rel)
-    return ""
+def detect_entrypoint(app_dir: Path, preferred: str | None = None) -> str:
+    """Find the runnable Python driver, never a build/test metadata helper."""
+    if preferred:
+        candidate = app_dir / preferred
+        if candidate.is_file():
+            return preferred
+        raise RuntimeError(f"Configured Python entrypoint does not exist: {preferred}")
+
+    ignored_dirs = {
+        ".git", ".github", ".venv", "venv", "tests", "test", "tools",
+        "scripts", "build", "dist", "docs", "examples", "locales",
+    }
+    ignored_prefixes = (
+        "custom_", "build_", "generate_", "generated_", "test_", "tests_",
+        "setup_", "release_", "migrate_",
+    )
+
+    ranked: list[tuple[int, int, str]] = []
+    for path in app_dir.glob("**/*.py"):
+        rel = path.relative_to(app_dir)
+        if len(rel.parts) > 4 or any(part.lower() in ignored_dirs for part in rel.parts[:-1]):
+            continue
+        name = rel.name.lower()
+        stem = rel.stem.lower()
+        if stem.startswith(ignored_prefixes) or stem.endswith(("_test", "_tests", "_helper")):
+            continue
+        if name == "driver.py":
+            score = 100
+        elif name == "main.py":
+            score = 90
+        elif name == "integration.py":
+            score = 80
+        elif re.fullmatch(r"(?:driver|main|integration|intg)[-_].+\.py", name):
+            score = 70
+        elif re.fullmatch(r".+[-_](?:driver|integration|intg)\.py", name):
+            score = 60
+        else:
+            continue
+        ranked.append((-score, len(rel.parts), str(rel)))
+
+    if not ranked:
+        return ""
+    ranked.sort()
+    return ranked[0][2]
 
 
 # --- multi-language source builds -------------------------------------------
@@ -1444,8 +1484,14 @@ def _prepare_stack_build(app_dir: Path, stack: str, job: Job,
             GENERIC_DOCKERFILE.replace("__PYTHON_IMAGE__", python_image)
         )
         (app_dir / "docker-entry.external.sh").write_text(GENERIC_ENTRY)
-        entrypoint = detect_entrypoint(app_dir)
-        job.log(f"Detected entrypoint: {entrypoint or '(auto at runtime)'}")
+        preferred_entrypoint = profile.get("python_entrypoint")
+        entrypoint = detect_entrypoint(
+            app_dir, str(preferred_entrypoint) if preferred_entrypoint else None
+        )
+        if preferred_entrypoint:
+            job.log(f"Using configured Python entrypoint: {entrypoint}")
+        else:
+            job.log(f"Detected Python entrypoint: {entrypoint or '(auto at runtime)'}")
         job.log(f"Using Python runtime image {python_image}")
         return "Dockerfile.external", entrypoint
     if stack == "node":
@@ -1784,6 +1830,10 @@ def _verify_container_started(container, job: Job, timeout: float = 6.0) -> None
     container.reload()
     last_status = str(container.status or last_status)
     restart_count = int(container.attrs.get("RestartCount", restart_count) or 0)
+    state = container.attrs.get("State", {}) or {}
+    exit_code = state.get("ExitCode")
+    state_error = str(state.get("Error") or "").strip()
+    oom_killed = bool(state.get("OOMKilled", False))
     if last_status == "running" and restart_count <= 1:
         job.log("Container startup check passed")
         return
@@ -1797,9 +1847,14 @@ def _verify_container_started(container, job: Job, timeout: float = 6.0) -> None
         container.remove(force=True)
     except Exception:  # noqa: BLE001
         pass
-    raise RuntimeError(
-        f"container did not remain running (status={last_status}, restarts={restart_count})"
-    )
+    details = [f"status={last_status}", f"restarts={restart_count}"]
+    if exit_code is not None:
+        details.append(f"exit_code={exit_code}")
+    if oom_killed:
+        details.append("oom_killed=true")
+    if state_error:
+        details.append(f"docker_error={state_error}")
+    raise RuntimeError(f"container did not remain running ({', '.join(details)})")
 
 
 def _run_container(
