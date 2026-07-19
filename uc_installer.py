@@ -20,7 +20,6 @@ Configuration (environment variables):
 """
 from __future__ import annotations
 
-import base64
 import io
 import json
 import os
@@ -49,7 +48,7 @@ from pydantic import BaseModel
 # Configuration
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 
 REGISTRY_URL = os.environ.get(
     "UC_REGISTRY_URL",
@@ -2810,53 +2809,103 @@ _health_cache: dict[str, tuple[float, str | None]] = {}
 _health_lock = threading.Lock()
 
 
-def _probe_port(port: Any, host: str = "127.0.0.1", timeout: float = 1.5) -> bool | None:
-    """Liveness probe that performs a proper WebSocket opening handshake.
+def _container_listening_ports(container) -> set[int] | None:
+    """Return TCP LISTEN ports from inside a container without opening a socket.
 
-    UC integrations run a WebSocket server (ucapi). A bare TCP connect-and-close
-    makes that server log a noisy "opening handshake failed / did not receive a
-    valid HTTP request" traceback, so we send a real Upgrade request (and a clean
-    close frame) — the integration sees a normal client, not malformed input.
-    Returns True if the port accepts the connection, False if refused, None if the
-    port is unknown."""
+    An earlier probe performed a real WebSocket handshake. Some integrations kept
+    that short-lived probe registered as a client and later logged recurring
+    ``write EPIPE`` warnings. Reading procfs is passive: it verifies that the
+    integration process has bound its port without creating an application-level
+    connection or producing integration log noise.
+
+    ``None`` means the image does not provide the minimal ``cat``/procfs support
+    required for the passive probe. Callers should then fall back to Docker's
+    running state instead of marking the integration unhealthy.
+    """
     try:
-        p = int(port)
+        result = container.exec_run(
+            ["sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null || true"],
+            stdout=True,
+            stderr=False,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+    fallback_output = (
+        result[1] if isinstance(result, tuple) and len(result) > 1 else b""
+    )
+    output = getattr(result, "output", fallback_output)
+    if isinstance(output, bytes):
+        text = output.decode("ascii", errors="ignore")
+    else:
+        text = str(output or "")
+    if not text.strip():
+        return None
+
+    listening: set[int] = set()
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 4 or fields[3].upper() != "0A":
+            continue
+        try:
+            listening.add(int(fields[1].rsplit(":", 1)[1], 16))
+        except (IndexError, ValueError):
+            continue
+    return listening
+
+
+def _container_internal_port(container, host_port: int) -> int:
+    """Resolve a published host port to its container-side TCP port."""
+    try:
+        mappings = ((container.attrs or {}).get("NetworkSettings") or {}).get("Ports") or {}
+        for container_port, bindings in mappings.items():
+            if not str(container_port).endswith("/tcp"):
+                continue
+            for binding in bindings or []:
+                try:
+                    if int(binding.get("HostPort")) == host_port:
+                        return int(str(container_port).split("/", 1)[0])
+                except (TypeError, ValueError):
+                    continue
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Installer-created containers normally use the same internal and external
+    # port through UC_INTEGRATION_HTTP_PORT, so this is also the correct fallback
+    # for host networking and incomplete Docker inspect data.
+    return host_port
+
+
+def _probe_port(container, port: Any) -> bool | None:
+    """Passively verify that the integration listens on its configured TCP port."""
+    try:
+        host_port = int(port)
     except (TypeError, ValueError):
         return None
-    key = base64.b64encode(os.urandom(16)).decode()
-    req = (
-        "GET / HTTP/1.1\r\n"
-        f"Host: {host}:{p}\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Key: {key}\r\n"
-        "Sec-WebSocket-Version: 13\r\n"
-        "\r\n"
-    ).encode()
     try:
-        with socket.create_connection((host, p), timeout=timeout) as s:
-            s.settimeout(timeout)
-            try:
-                s.sendall(req)
-                s.recv(256)                                # let the server send its 101
-                s.sendall(b"\x88\x80\x00\x00\x00\x00")     # masked empty close frame
-            except OSError:
-                pass  # port was open; a clean close is best-effort
-            return True
-    except OSError:
-        return False
+        container.reload()
+        if container.status != "running":
+            return False
+    except Exception:  # noqa: BLE001
+        return None
+
+    listening = _container_listening_ports(container)
+    if listening is None:
+        return None
+    return _container_internal_port(container, host_port) in listening
 
 
-def _probe_health(port: Any) -> str | None:
+def _probe_health(container, port: Any) -> str | None:
     if not health_probe_on():
         return None
-    keyp = str(port)
+    container_key = getattr(container, "id", None) or getattr(container, "name", "container")
+    keyp = f"{container_key}:{port}"
     now = time.time()
     with _health_lock:
         hit = _health_cache.get(keyp)
         if hit and now - hit[0] < _HEALTH_TTL:
             return hit[1]
-    ok = _probe_port(port)
+    ok = _probe_port(container, port)
     val = None if ok is None else ("responding" if ok else "unreachable")
     with _health_lock:
         _health_cache[keyp] = (now, val)
@@ -2891,7 +2940,7 @@ def _refresh_stats() -> None:
                 # No Docker HEALTHCHECK on these images — derive health from an
                 # application-level probe of the integration's WebSocket port.
                 if not docker_health:
-                    h = _probe_health(port)
+                    h = _probe_health(c, port)
                     if h:
                         s["health"] = h
                 return iid, s
@@ -3852,7 +3901,7 @@ def _alert_monitor() -> None:
                 c = _container_for(iid)
                 if c is None:
                     continue
-                cur = (_probe_health(rec.get("port")) or "running") if c.status == "running" else c.status
+                cur = (_probe_health(c, rec.get("port")) or "running") if c.status == "running" else c.status
                 prev = _alert_state.get(iid)
                 bad = cur in ("unreachable", "exited", "dead")
                 was_bad = prev in ("unreachable", "exited", "dead")

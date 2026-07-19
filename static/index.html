@@ -236,7 +236,7 @@
 </section>
 <section class="settings-section" data-settings-tab="access">
 <h3>Health and access</h3><div class="hint">Control active health checks and optional API authentication.</div>
-<label class="checkline"><input id="settingsProbe" type="checkbox"/> Enable WebSocket health probe</label>
+<label class="checkline"><input id="settingsProbe" type="checkbox"/> Enable passive container health check</label>
 <div class="field" style="margin-top:18px"><label>Access token <span style="color:var(--muted)">· optional</span></label><input class="mono" id="settingsToken" placeholder="leave blank for no authentication" type="password"/></div>
 
 </section>
@@ -310,7 +310,7 @@
 <div class="hint">Unit restarted after an update. Change only if you renamed it.</div>
 </div>
 <div class="eyebrow" style="margin:16px 0 10px">Health &amp; access</div>
-<label class="checkline"><input checked="" id="setupProbe" type="checkbox"/> Enable WebSocket health probe</label>
+<label class="checkline"><input checked="" id="setupProbe" type="checkbox"/> Enable passive container health check</label>
 <div class="hint" style="margin:4px 0 12px">Periodically checks each integration is serving. Disable to remove all extra connections.</div>
 <div class="field">
 <label>Access token <span style="color:var(--muted)">· optional</span></label>

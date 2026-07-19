@@ -247,7 +247,7 @@ Environment variables provide installation-time defaults:
 | `UC_INSTALLER_UPDATE_BRANCH` | `main` | Branch fallback when no release is available |
 | `UC_INSTALLER_SERVICE` | `uc-external-integration-installer` | systemd service name |
 | `UC_INSTALLER_ALERT_WEBHOOK` | empty | Default webhook URL |
-| `UC_INSTALLER_HEALTH_PROBE` | `1` | Set to `0` to disable integration health probes |
+| `UC_INSTALLER_HEALTH_PROBE` | `1` | Set to `0` to disable passive container listener checks |
 
 ## Security
 
