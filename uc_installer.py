@@ -1228,7 +1228,10 @@ echo "No runnable .NET entry found in /out. Contents:"; ls -la
 exit 1
 """
 
-RUST_DOCKERFILE = r"""FROM rust:slim AS build
+RUST_DOCKERFILE = r"""# Keep the builder and runtime on the same Debian release.
+# The floating rust:slim tag currently tracks Debian Trixie; binaries built
+# there can require a newer glibc than the Bookworm runtime provides.
+FROM rust:slim-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates pkg-config libssl-dev clang cmake protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . /app
@@ -1238,7 +1241,7 @@ RUN cargo build --release && mkdir -p /out && \
     test -n "$BIN" && cp "$BIN" /out/driver
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libgcc-s1 && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/driver /usr/local/bin/driver
 CMD ["/usr/local/bin/driver"]
 """
@@ -1842,10 +1845,12 @@ def _verify_container_started(container, job: Job, timeout: float = 6.0) -> None
         job.log("Container startup failed. Last container output:")
         for line in logs.splitlines()[-80:]:
             job.log(f"  {line}")
-    try:
-        container.remove(force=True)
-    except Exception:  # noqa: BLE001
-        pass
+    # Keep the failed container so its full stderr remains available after the
+    # background install job has ended. A later install/rebuild removes the old
+    # container before creating the replacement.
+    container_name = str(getattr(container, "name", "") or getattr(container, "id", "unknown"))
+    job.log(f"Failed container preserved for diagnostics: {container_name}")
+    job.log(f"Inspect it with: docker logs --tail 200 {container_name}")
     details = [f"status={last_status}", f"restarts={restart_count}"]
     if exit_code is not None:
         details.append(f"exit_code={exit_code}")
