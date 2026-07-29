@@ -519,6 +519,61 @@ function openConfig(id) {
   $('cfgSubmit').textContent = 'Apply & restart';
   showWorkspacePanel('cfgBack');
 }
+function repoEnvRows() {
+  return Array.from(document.querySelectorAll('#repoEnvList .env-row')).reduce((acc, r) => {
+    const k = r.querySelector('.k').value.trim(); const v = r.querySelector('.v').value;
+    if (k) acc[k] = v; return acc;
+  }, {});
+}
+function addRepoEnvRow(k, v) {
+  const row = document.createElement('div');
+  row.className = 'env-row';
+  row.innerHTML = '<input class="k" placeholder="KEY" value="' + esc(k || '') + '">' +
+                  '<input class="v" placeholder="value" value="' + esc(v || '') + '">' +
+                  '<button class="btn btn-line btn-sm" aria-label="Remove variable" title="Remove variable" onclick="this.parentElement.remove()">'+msIcon('close')+'</button>';
+  $('repoEnvList').appendChild(row);
+}
+function openRepositoryInstall() {
+  ['repoUrl','repoName','repoIntegrationId','repoDriverId','repoSourceSubdir','repoDockerfile','repoPythonEntrypoint','repoPort'].forEach(id => { if ($(id)) $(id).value = ''; });
+  $('repoRef').value = 'latest';
+  $('repoEnvList').innerHTML = '';
+  const advanced = document.querySelector('#repoBack .repo-advanced'); if (advanced) advanced.open = false;
+  showWorkspacePanel('repoBack');
+  setTimeout(() => $('repoUrl') && $('repoUrl').focus(), 50);
+}
+async function submitRepositoryInstall() {
+  const repository = $('repoUrl').value.trim();
+  if (!repository) { toast('Enter a repository URL', 'bad'); $('repoUrl').focus(); return; }
+  const body = {
+    repository,
+    ref: $('repoRef').value.trim() || 'latest',
+    env: repoEnvRows()
+  };
+  const optional = {
+    name: 'repoName', integration_id: 'repoIntegrationId', driver_id: 'repoDriverId',
+    source_subdir: 'repoSourceSubdir', dockerfile: 'repoDockerfile',
+    python_entrypoint: 'repoPythonEntrypoint'
+  };
+  Object.entries(optional).forEach(([key, id]) => { const value = $(id).value.trim(); if (value) body[key] = value; });
+  const port = $('repoPort').value.trim();
+  if (port) {
+    const parsed = parseInt(port, 10);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) { toast('Enter a valid port', 'bad'); return; }
+    body.port = parsed;
+  }
+  const button = $('repoSubmit');
+  button.disabled = true; button.textContent = 'Starting…';
+  try {
+    const result = await api('/api/custom-integrations/install', { method: 'POST', body: JSON.stringify(body) });
+    closeModal('repoBack');
+    followJob(result.job_id, 'Installing ' + (result.instance_id || 'repository integration'));
+  } catch (e) {
+    toast(e.message, 'bad');
+  } finally {
+    button.disabled = false; button.textContent = 'Install repository';
+  }
+}
+
 async function submitConfig() {
   let path, body = {};
   if (cfgMode === 'install') {
@@ -1582,12 +1637,12 @@ function renderInstalled(){
 }
 async function setAutoUpdate(id,enabled){ try{await api('/api/instances/'+id+'/auto-update',{method:'POST',body:JSON.stringify({enabled})}); const it=INSTALLED.find(x=>x.id===id); if(it)it.auto_update=enabled; toast('Auto-update '+(enabled?'enabled':'disabled'),'ok');}catch(e){toast(e.message,'bad');loadInstalled();} }
 
-function routeForPanel(id){ return {remBack:'remotes',logBack:logInstaller?'installer-logs':'logs/'+(logTarget||''),actBack:'activity',healthBack:'health',maintBack:'settings',updBack:'update',cfgBack:'configure/'+(cfgTarget||''),jobBack:'operations',setupBack:'setup'}[id]||'installed'; }
+function routeForPanel(id){ return {remBack:'remotes',logBack:logInstaller?'installer-logs':'logs/'+(logTarget||''),actBack:'activity',healthBack:'health',maintBack:'settings',updBack:'update',cfgBack:'configure/'+(cfgTarget||''),repoBack:'repository-install',jobBack:'operations',setupBack:'setup'}[id]||'installed'; }
 function setHash(route,replace=false){ const h='#/'+route; if(location.hash!==h) history[replace?'replaceState':'pushState']({},'',h); }
 const _switchTab=switchTab; switchTab=function(t){ _switchTab(t); setHash(t); };
 const _showWorkspacePanel=showWorkspacePanel; showWorkspacePanel=function(id){ _showWorkspacePanel(id); setHash(routeForPanel(id)); };
 const _hideWorkspacePanel=hideWorkspacePanel; hideWorkspacePanel=function(id){ _hideWorkspacePanel(id); setHash(TAB||'browse'); };
-function applyRoute(){ const r=(location.hash||'#/installed').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='health'){openHealth();return;} if(r==='diagnostics'){openDiagnostics();return;} if(r==='settings'){openMaint();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
+function applyRoute(){ const r=(location.hash||'#/installed').replace(/^#\/?/,''); if(r==='browse'||r==='installed'){_switchTab(r);return;} if(r==='remotes'){openRemotes();return;} if(r==='activity'){openActivity();return;} if(r==='health'){openHealth();return;} if(r==='diagnostics'){openDiagnostics();return;} if(r==='settings'){openMaint();return;} if(r==='repository-install'){openRepositoryInstall();return;} if(r==='installer-logs'){openInstallerLogs();return;} if(r.startsWith('logs/')){openLogs(decodeURIComponent(r.slice(5)));return;} }
 window.addEventListener('popstate',applyRoute);
 
 const OPERATION_TTL = { success: 12000, failed: 30000 };
@@ -1663,7 +1718,7 @@ const _renderRemoteList=renderRemoteList; renderRemoteList=function(){ _renderRe
 function captureFormBaseline(rootId){ const root=$(rootId); if(!root)return; const data={}; root.querySelectorAll('input,select,textarea').forEach((el,i)=>data[el.id||i]=el.type==='checkbox'?el.checked:el.value); FORM_BASELINES.set(rootId,JSON.stringify(data)); }
 function formDirty(rootId){ const root=$(rootId);if(!root||!FORM_BASELINES.has(rootId))return false;const data={};root.querySelectorAll('input,select,textarea').forEach((el,i)=>data[el.id||i]=el.type==='checkbox'?el.checked:el.value);return JSON.stringify(data)!==FORM_BASELINES.get(rootId);}
 const _saveMainSettings=saveMainSettings;
-window.addEventListener('beforeunload',e=>{if(formDirty('maintBack')||formDirty('cfgBack')||formDirty('remBack')){e.preventDefault();e.returnValue='';}});
+window.addEventListener('beforeunload',e=>{if(formDirty('maintBack')||formDirty('cfgBack')||formDirty('repoBack')||formDirty('remBack')){e.preventDefault();e.returnValue='';}});
 
 restoreInstalledView();
 setTimeout(()=>{if(location.hash)applyRoute();else setHash('installed',true);},0);

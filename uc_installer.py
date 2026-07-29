@@ -48,7 +48,7 @@ from pydantic import BaseModel
 # Configuration
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 
 REGISTRY_URL = os.environ.get(
     "UC_REGISTRY_URL",
@@ -781,6 +781,68 @@ def entry_base_driver_id(entry: dict[str, Any]) -> str:
     return str(profile.get("driver_id") or entry.get("driver_id") or entry.get("id") or "integration")
 
 
+def entry_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
+    """Persist enough source metadata to rebuild non-registry integrations."""
+    snapshot: dict[str, Any] = {
+        "id": str(entry.get("id") or "integration"),
+        "name": str(entry.get("name") or entry.get("id") or "Integration"),
+        "repository": str(entry.get("repository") or ""),
+        "driver_id": str(entry_base_driver_id(entry)),
+        "official": bool(entry.get("official")),
+        "custom": bool(entry.get("custom")),
+    }
+    for key in ("description", "author"):
+        if entry.get(key):
+            snapshot[key] = str(entry[key])
+    runtime = entry.get("external_runtime")
+    if isinstance(runtime, dict):
+        snapshot["external_runtime"] = runtime
+    if entry.get("custom"):
+        snapshot["custom_name_explicit"] = bool(entry.get("custom_name_explicit"))
+        snapshot["custom_driver_id_explicit"] = bool(entry.get("custom_driver_id_explicit"))
+    return snapshot
+
+
+def entry_from_record(rec: dict[str, Any]) -> dict[str, Any]:
+    """Reconstruct an install entry when it is not present in the registry."""
+    saved = rec.get("entry_snapshot")
+    if isinstance(saved, dict):
+        entry = dict(saved)
+    else:
+        integration_id = str(rec.get("integration_id") or rec.get("id") or "integration")
+        entry = {
+            "id": integration_id,
+            "name": rec.get("name") or integration_id,
+            "repository": rec.get("repository") or "",
+            "driver_id": rec.get("base_driver_id") or rec.get("driver_id") or integration_id,
+            "official": bool(rec.get("official")),
+            "custom": bool(rec.get("custom")),
+        }
+        runtime = rec.get("external_runtime")
+        if isinstance(runtime, dict):
+            entry["external_runtime"] = runtime
+    entry.setdefault("id", str(rec.get("integration_id") or rec.get("id") or "integration"))
+    entry.setdefault("name", rec.get("name") or entry["id"])
+    entry.setdefault("repository", rec.get("repository") or "")
+    entry.setdefault("driver_id", rec.get("base_driver_id") or rec.get("driver_id") or entry["id"])
+    return entry
+
+
+def installed_entry(integration_id: str) -> dict[str, Any] | None:
+    for rec in load_state().get("integrations", {}).values():
+        if str(rec.get("integration_id") or rec.get("id")) == integration_id:
+            return entry_from_record(rec)
+    return None
+
+
+def resolve_integration_entry(integration_id: str) -> dict[str, Any] | None:
+    try:
+        registry_entry = find_integration(integration_id)
+    except Exception:  # registry availability must not break stored custom entries
+        registry_entry = None
+    return registry_entry or installed_entry(integration_id)
+
+
 def is_installable(entry: dict[str, Any]) -> bool:
     repo = (entry.get("repository") or "").strip()
     if not repo or not repo.startswith(("http://", "https://")):
@@ -789,8 +851,8 @@ def is_installable(entry: dict[str, Any]) -> bool:
     # public source repository to build.
     if repo.rstrip("/") == PLACEHOLDER_REPO.rstrip("/"):
         return False
-    owner, name = owner_repo(repo)
-    return bool(owner and name)
+    parsed = urllib.parse.urlparse(repo)
+    return bool(parsed.hostname and parsed.path.strip("/"))
 
 
 def image_from_repo(repo: str, tag: str = "latest") -> str:
@@ -802,10 +864,68 @@ def image_from_repo(repo: str, tag: str = "latest") -> str:
 
 
 def owner_repo(repo: str) -> tuple[str, str]:
-    r = re.sub(r"^https?://github\.com/", "", repo.strip())
-    r = re.sub(r"\.git$", "", r)
-    parts = r.split("/")
-    return (parts[0], parts[1]) if len(parts) >= 2 else ("", r)
+    value = repo.strip()
+    parsed = urllib.parse.urlparse(value if "://" in value else f"https://github.com/{value}")
+    if (parsed.hostname or "").lower() != "github.com":
+        return "", ""
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) < 2:
+        return "", ""
+    return parts[0], re.sub(r"\.git$", "", parts[1])
+
+
+def normalize_repository_url(repository: str) -> str:
+    """Validate and normalize a public HTTP(S) Git repository URL."""
+    value = (repository or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?", value):
+        value = f"https://github.com/{value}"
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(400, "Enter a valid public HTTP(S) Git repository URL")
+    if parsed.username or parsed.password:
+        raise HTTPException(400, "Repository URLs containing credentials are not accepted")
+    if parsed.query or parsed.fragment:
+        raise HTTPException(400, "Repository URLs must not contain query parameters or fragments")
+    path = re.sub(r"/+", "/", parsed.path or "").rstrip("/")
+    if not path or path == "/":
+        raise HTTPException(400, "The repository URL must include a repository path")
+    host = (parsed.hostname or "").lower()
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise HTTPException(400, "The repository URL contains an invalid port") from exc
+    port = f":{parsed_port}" if parsed_port else ""
+    normalized = urllib.parse.urlunparse((parsed.scheme.lower(), host + port, path, "", "", ""))
+    return normalized
+
+
+def clean_repo_relative_path(value: str | None, field_name: str) -> str:
+    cleaned = str(value or "").strip().replace("\\", "/")
+    while cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    if not cleaned or cleaned == ".":
+        return ""
+    relative = Path(cleaned)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise HTTPException(400, f"{field_name} must be a relative path inside the repository")
+    return relative.as_posix()
+
+
+def validate_git_ref(value: str | None) -> str:
+    ref = str(value or "latest").strip() or "latest"
+    if len(ref) > 200 or ref.startswith("-") or any(ord(ch) < 32 for ch in ref):
+        raise HTTPException(400, "The Git ref is invalid")
+    return ref
+
+
+def custom_integration_slug(repository: str) -> str:
+    parsed = urllib.parse.urlparse(repository)
+    parts = [p for p in parsed.path.strip("/").split("/") if p]
+    tail = parts[-2:] if len(parts) >= 2 else parts
+    raw = "-".join([parsed.hostname or "repo", *tail])
+    raw = re.sub(r"\.git$", "", raw, flags=re.IGNORECASE)
+    slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    return ("custom-" + slug)[:72].rstrip("-") or f"custom-{uuid.uuid4().hex[:10]}"
 
 
 def image_candidate_for_entry(entry: dict[str, Any], tag: str = "latest") -> str | None:
@@ -816,6 +936,8 @@ def image_candidate_for_entry(entry: dict[str, Any], tag: str = "latest") -> str
     prebuilt image as standalone-ready.
     """
     profile = external_runtime_profile(entry)
+    if profile.get("force_source_build"):
+        return None
     configured = profile.get("docker_image") or entry.get("docker_image")
     if configured:
         if profile.get("patch_driver_metadata") and not profile.get("prebuilt_standalone"):
@@ -831,6 +953,9 @@ def image_candidate_for_entry(entry: dict[str, Any], tag: str = "latest") -> str
         image = str(configured).replace("{version}", tag or "latest")
         return image
     if entry.get("official") or profile.get("patch_driver_metadata"):
+        return None
+    owner, repo = owner_repo(str(entry.get("repository") or ""))
+    if not owner or not repo:
         return None
     return image_from_repo(str(entry.get("repository") or ""), tag)
 
@@ -1349,8 +1474,21 @@ def clone_or_update(repo: str, app_dir: Path, log, ref: str | None = None) -> No
             )
             subprocess.run(["git", "-C", str(app_dir), "checkout", str(ref)], check=True)
     elif (app_dir / ".git").exists():
-        log(f"Updating source in {app_dir.name} ...")
-        subprocess.run(["git", "-C", str(app_dir), "pull", "--ff-only"], check=False)
+        current = subprocess.run(
+            ["git", "-C", str(app_dir), "config", "--get", "remote.origin.url"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        comparable = lambda value: re.sub(r"\.git$", "", str(value).rstrip("/"))
+        if current and comparable(current) != comparable(repo):
+            log(f"Stored source points to {current}; recloning {repo} ...")
+            shutil.rmtree(app_dir, ignore_errors=True)
+            app_dir.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["git", "clone", "--recurse-submodules", "--depth", "1", repo, str(app_dir)], check=True
+            )
+        else:
+            log(f"Updating source in {app_dir.name} ...")
+            subprocess.run(["git", "-C", str(app_dir), "pull", "--ff-only"], check=False)
     else:
         log(f"Cloning {repo} ...")
         app_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1476,8 +1614,13 @@ def _find_repo_dockerfile(app_dir: Path, entry: dict[str, Any] | None = None) ->
         return None
     explicit = profile.get("dockerfile")
     if explicit:
-        candidate = str(explicit)
-        return candidate if (app_dir / candidate).exists() else None
+        candidate = str(explicit).strip().replace("\\", "/")
+        relative = Path(candidate)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError(f"Invalid Dockerfile path: {candidate}")
+        if not (app_dir / relative).is_file():
+            raise RuntimeError(f"Configured Dockerfile does not exist: {candidate}")
+        return relative.as_posix()
     for candidate in ("Dockerfile", "docker/Dockerfile", "Dockerfile.prod"):
         if (app_dir / candidate).exists():
             return candidate
@@ -1600,6 +1743,53 @@ def _restore_driver_metadata(backups: list[tuple[Path, bytes]]) -> None:
             pass
 
 
+def _driver_metadata(source_dir: Path) -> tuple[dict[str, Any], Path] | None:
+    candidates = [source_dir / "driver.json", source_dir / "resources" / "driver.json"]
+    candidates.extend(sorted(
+        (p for p in source_dir.glob("**/driver.json") if ".git" not in p.parts),
+        key=lambda p: (len(p.relative_to(source_dir).parts), str(p)),
+    ))
+    seen: set[Path] = set()
+    for path in candidates:
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict) and data.get("driver_id"):
+            return data, path
+    return None
+
+
+def _enrich_custom_entry(entry: dict[str, Any], source_dir: Path, job: Job) -> None:
+    if not entry.get("custom"):
+        return
+    found = _driver_metadata(source_dir)
+    if not found:
+        job.log("No driver.json metadata found; using the repository-derived name and driver ID")
+        return
+    metadata, path = found
+    rel = path.relative_to(source_dir)
+    if not entry.get("custom_driver_id_explicit") and metadata.get("driver_id"):
+        entry["driver_id"] = str(metadata["driver_id"])
+        job.log(f"Detected driver ID '{entry['driver_id']}' from {rel}")
+    if not entry.get("custom_name_explicit"):
+        name = metadata.get("name")
+        if isinstance(name, dict):
+            name = name.get("en") or next((v for v in name.values() if v), None)
+        if isinstance(name, str) and name.strip():
+            entry["name"] = name.strip()
+            job.log(f"Detected integration name '{entry['name']}' from {rel}")
+    if not entry.get("description"):
+        description = metadata.get("description")
+        if isinstance(description, dict):
+            description = description.get("en") or next((v for v in description.values() if v), None)
+        if isinstance(description, str) and description.strip():
+            entry["description"] = description.strip()
+
+
 def _build_image(entry: dict[str, Any], job: Job, version: str = "latest",
                  image_scope: str | None = None, external_driver_id: str | None = None,
                  external_name: str | None = None) -> tuple[str, str | None, str]:
@@ -1614,6 +1804,7 @@ def _build_image(entry: dict[str, Any], job: Job, version: str = "latest",
     tag = f"uc-local/{image_name}:{safe}"
     client = get_docker()
     source_dir = _source_build_dir(app_dir, entry, job)
+    _enrich_custom_entry(entry, source_dir, job)
     backups: list[tuple[Path, bytes]] = []
     if external_driver_id:
         backups = _patch_driver_metadata(
@@ -1965,7 +2156,11 @@ def _run_container(
         "name": name,
         "label": label,
         "driver_id": driver_id,
+        "base_driver_id": base_driver,
         "repository": entry.get("repository", ""),
+        "custom": bool(entry.get("custom")),
+        "external_runtime": entry.get("external_runtime") if isinstance(entry.get("external_runtime"), dict) else {},
+        "entry_snapshot": entry_snapshot(entry),
         "image": image,
         "source": source,
         "port": port,
@@ -2027,6 +2222,11 @@ def do_install(entry: dict[str, Any], instance_id: str, ordinal: int, port: int,
                     external_name=label if patch_metadata else None,
                 )
                 source = "official-build" if patch_metadata else "build"
+            # Custom source builds can discover name/driver_id from driver.json.
+            # Resolve these values again after cloning/build preparation.
+            base_driver = entry_base_driver_id(entry)
+            driver_id = instance_driver_id(base_driver, ordinal)
+            label = instance_label(entry.get("name", entry["id"]), ordinal)
             _run_container(entry, instance_id, ordinal, image, source, port,
                            extra_env, entrypoint, job, version, stack)
         job.finish("success")
@@ -2039,11 +2239,7 @@ def do_reconfigure(rec: dict[str, Any], port: int, extra_env: dict[str, str], jo
     """Re-run an existing instance with new port/env, reusing its resolved image."""
     try:
         integration_id = rec.get("integration_id", rec["id"])
-        entry = find_integration(integration_id) or {
-            "id": integration_id, "name": rec.get("name", integration_id),
-            "repository": rec.get("repository", ""), "driver_id": rec.get("driver_id"),
-            "official": rec.get("official", False),
-        }
+        entry = resolve_integration_entry(integration_id) or entry_from_record(rec)
         image = rec.get("image") or image_from_repo(rec.get("repository", ""))
         source = rec.get("source", "ghcr")
         entrypoint = rec.get("entrypoint") or None
@@ -2058,9 +2254,9 @@ def do_reconfigure(rec: dict[str, Any], port: int, extra_env: dict[str, str], jo
 def do_rebuild(rec: dict[str, Any], job: Job, version: str | None = None):
     """Force a fresh pull/build of an existing instance."""
     integration_id = rec.get("integration_id", rec["id"])
-    entry = find_integration(integration_id)
-    if entry is None:
-        job.finish("error", "ERROR: integration is no longer in the registry")
+    entry = resolve_integration_entry(integration_id) or entry_from_record(rec)
+    if not entry.get("repository"):
+        job.finish("error", "ERROR: no source repository is stored for this integration")
         return
     do_install(entry, rec["instance_id"], rec.get("instance", 1), int(rec["port"]),
                rec.get("env", {}), job, version or rec.get("version", "latest"))
@@ -2347,6 +2543,19 @@ class InstallBody(BaseModel):
     version: str | None = None
 
 
+class CustomRepositoryInstallBody(BaseModel):
+    repository: str
+    ref: str | None = "latest"
+    name: str | None = None
+    integration_id: str | None = None
+    driver_id: str | None = None
+    source_subdir: str | None = None
+    dockerfile: str | None = None
+    python_entrypoint: str | None = None
+    port: int | None = None
+    env: dict[str, str] = {}
+
+
 class ConfigBody(BaseModel):
     port: int | None = None
     env: dict[str, str] = {}
@@ -2602,6 +2811,94 @@ def api_installed() -> list[dict[str, Any]]:
     return result
 
 
+@app.post("/api/custom-integrations/install", dependencies=[Depends(require_token)])
+def api_custom_repository_install(body: CustomRepositoryInstallBody) -> dict[str, str]:
+    """Install a public Git repository without requiring a registry entry."""
+    if not docker_available():
+        raise HTTPException(503, "Docker is not available")
+
+    repository = normalize_repository_url(body.repository)
+    version = validate_git_ref(body.ref)
+    source_subdir = clean_repo_relative_path(body.source_subdir, "Source subdirectory")
+    dockerfile = clean_repo_relative_path(body.dockerfile, "Dockerfile path")
+    python_entrypoint = clean_repo_relative_path(body.python_entrypoint, "Python entrypoint")
+
+    requested_id = str(body.integration_id or "").strip().lower()
+    if requested_id:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{1,71}", requested_id):
+            raise HTTPException(400, "Integration ID must contain 2-72 lowercase letters, numbers, dots, dashes, or underscores")
+        integration_id = requested_id
+    else:
+        integration_id = custom_integration_slug(repository)
+        if source_subdir:
+            suffix = re.sub(r"[^a-z0-9]+", "-", source_subdir.lower()).strip("-")[-24:]
+            if suffix:
+                integration_id = f"{integration_id[:max(1, 71-len(suffix))]}-{suffix}".rstrip("-")
+
+    existing_repositories = {
+        str(rec.get("repository") or "").rstrip("/")
+        for rec in load_state().get("integrations", {}).values()
+        if str(rec.get("integration_id") or rec.get("id")) == integration_id
+    }
+    if existing_repositories and repository.rstrip("/") not in existing_repositories:
+        raise HTTPException(409, "That integration ID is already used by a different repository")
+
+    name = str(body.name or "").strip()
+    repo_name = re.sub(r"\.git$", "", urllib.parse.urlparse(repository).path.rstrip("/").split("/")[-1])
+    if not name:
+        name = re.sub(r"[-_]+", " ", repo_name).strip().title() or integration_id
+    if len(name) > 120:
+        raise HTTPException(400, "Integration name is too long")
+
+    driver_id = str(body.driver_id or "").strip()
+    if driver_id and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", driver_id):
+        raise HTTPException(400, "Driver ID contains unsupported characters")
+
+    runtime: dict[str, Any] = {"force_source_build": True}
+    if source_subdir:
+        runtime["source_subdir"] = source_subdir
+    if dockerfile:
+        runtime["dockerfile"] = dockerfile
+    if python_entrypoint:
+        runtime["python_entrypoint"] = python_entrypoint
+
+    previous_entry = installed_entry(integration_id)
+    if previous_entry:
+        previous_runtime = previous_entry.get("external_runtime")
+        if not isinstance(previous_runtime, dict):
+            previous_runtime = {"force_source_build": True}
+        if any((source_subdir, dockerfile, python_entrypoint)) and runtime != previous_runtime:
+            raise HTTPException(409, "This integration ID already uses different repository build options; choose another integration ID")
+        if body.name and name != str(previous_entry.get("name") or ""):
+            raise HTTPException(409, "This integration ID already uses a different integration name")
+        if driver_id and driver_id != str(previous_entry.get("driver_id") or ""):
+            raise HTTPException(409, "This integration ID already uses a different driver ID")
+        entry = dict(previous_entry)
+        entry["repository"] = repository
+        entry["custom"] = True
+    else:
+        entry = {
+            "id": integration_id,
+            "name": name,
+            "repository": repository,
+            "driver_id": driver_id or integration_id,
+            "custom": True,
+            "custom_name_explicit": bool(body.name and body.name.strip()),
+            "custom_driver_id_explicit": bool(driver_id),
+            "external_runtime": runtime,
+        }
+
+    instance_id, ordinal = next_instance_id(integration_id)
+    port = resolve_port(body.port, instance_id=instance_id)
+    job = new_job("custom-install", instance_id)
+    threading.Thread(
+        target=do_install,
+        args=(entry, instance_id, ordinal, port, body.env, job, version, ordinal > 1),
+        daemon=True,
+    ).start()
+    return {"job_id": job.id, "instance_id": instance_id, "integration_id": integration_id}
+
+
 @app.post("/api/integrations/{integration_id}/install", dependencies=[Depends(require_token)])
 def api_install(integration_id: str, body: InstallBody) -> dict[str, str]:
     """Install (or replace) the default instance of an integration."""
@@ -2625,7 +2922,7 @@ def api_install(integration_id: str, body: InstallBody) -> dict[str, str]:
 @app.post("/api/integrations/{integration_id}/add-instance", dependencies=[Depends(require_token)])
 def api_add_instance(integration_id: str, body: InstallBody) -> dict[str, str]:
     """Spin up an additional, independent instance of an integration."""
-    entry = find_integration(integration_id)
+    entry = resolve_integration_entry(integration_id)
     if entry is None:
         raise HTTPException(404, "Unknown integration")
     if not is_installable(entry):
@@ -2773,11 +3070,12 @@ def api_logs_stream(instance_id: str, tail: int = 200):
 
 @app.get("/api/integrations/{integration_id}/versions", dependencies=[Depends(require_token)])
 def api_versions(integration_id: str) -> dict[str, Any]:
-    entry = find_integration(integration_id)
+    entry = resolve_integration_entry(integration_id)
     if entry is None:
         raise HTTPException(404, "Unknown integration")
     versions = repo_versions(entry.get("repository", ""))
-    rec = load_state()["integrations"].get(integration_id)
+    rec = next((r for r in load_state()["integrations"].values()
+                if str(r.get("integration_id") or r.get("id")) == integration_id), None)
     return {
         "current": (rec or {}).get("version"),
         "installed": rec is not None,
@@ -3195,7 +3493,7 @@ def api_remotes_register(rid: str, body: RegisterBody) -> dict[str, Any]:
     rec = load_state()["integrations"].get(body.integration_id)
     if rec is None:
         raise HTTPException(404, "Instance is not installed")
-    entry = find_integration(rec.get("integration_id", body.integration_id)) or {}
+    entry = resolve_integration_entry(rec.get("integration_id", body.integration_id)) or entry_from_record(rec)
     port = int(rec.get("port"))
     advertise = body.advertise_ip or remote.get("advertise_ip") or detect_host_ip(remote["host"])
     if not advertise:
@@ -3472,7 +3770,7 @@ def api_registration_preflight(rid: str, instance_id: str) -> dict[str, Any]:
     rec = load_state()["integrations"].get(instance_id)
     if not rec:
         raise HTTPException(404, "Instance is not installed")
-    entry = find_integration(rec.get("integration_id", instance_id)) or {}
+    entry = resolve_integration_entry(rec.get("integration_id", instance_id)) or entry_from_record(rec)
     advertise = remote.get("advertise_ip") or detect_host_ip(remote["host"])
     payload = build_driver_payload(entry, rec, advertise or "0.0.0.0", int(rec.get("port") or 0))
     issues: list[dict[str, Any]] = []

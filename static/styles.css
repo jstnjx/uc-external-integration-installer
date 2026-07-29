@@ -472,6 +472,7 @@
   #maintBack .workspace-view > .body,
   #setupBack .workspace-view > .body,
   #cfgBack .workspace-view > .body,
+  #repoBack .workspace-view > .body,
   #updBack .workspace-view > .body,
   #actBack .workspace-view > .body { width: 100%; max-width: none; }
   #logBack .workspace-view > header .x { margin-left: 0; }
@@ -908,3 +909,13 @@
   flex: none;
 }
 .material-symbols-outlined.rotate-180 { transform: rotate(180deg); }
+
+
+/* Direct repository installation */
+.repo-warning { display:flex; align-items:flex-start; gap:10px; margin:0 0 20px; padding:13px 14px; border:1px solid var(--line); background:var(--elev); color:var(--muted); font-size:13px; line-height:1.45; }
+.repo-warning .material-symbols-outlined { color:var(--yellow); font-size:20px; flex:none; }
+.repo-advanced { margin:4px 0 20px; border:1px solid var(--line); background:var(--card); }
+.repo-advanced summary { cursor:pointer; padding:13px 14px; color:var(--ink); font-weight:650; user-select:none; }
+.repo-advanced[open] summary { border-bottom:1px solid var(--line); }
+.repo-advanced-body { padding:16px 14px 2px; }
+#repoBack .workspace-view { max-width:820px; }

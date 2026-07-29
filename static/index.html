@@ -73,7 +73,8 @@
 <div><h3>Integration catalog</h3><p>Install supported integrations or create additional instances.</p></div>
 <div class="section-actions">
 <button class="btn btn-line" onclick="refreshRegistry()"><span class="material-symbols-outlined" aria-hidden="true">refresh</span> Refresh registry</button>
-<button class="btn btn-primary" id="archiveBtn" onclick="$('archiveFile').click()" style="display:none" title="Install from an Unfolded Circle release .tar.gz (ARM64 host only)">Install from file</button>
+<button class="btn btn-line" id="archiveBtn" onclick="$('archiveFile').click()" style="display:none" title="Install from an Unfolded Circle release .tar.gz (ARM64 host only)">Install from file</button>
+<button class="btn btn-primary" onclick="openRepositoryInstall()"><span class="material-symbols-outlined" aria-hidden="true">add_link</span> Install from repository</button>
 </div>
 </div>
 <input accept=".tar.gz,.tgz,application/gzip" id="archiveFile" onchange="installArchive(this.files[0])" style="display:none" type="file"/>
@@ -126,6 +127,74 @@
 <div class="foot">
 <button class="btn btn-line" onclick="closeModal('cfgBack')">Cancel</button>
 <button class="btn btn-primary" id="cfgSubmit" onclick="submitConfig()">Install</button>
+</div>
+</div>
+</div><div class="workspace-panel" data-workspace-panel="true" id="repoBack">
+<div class="workspace-view">
+<header>
+<h2>Install from repository</h2><span class="sub">outside the registry</span>
+<button aria-label="Back" class="x" onclick="closeModal('repoBack')" title="Back"><span class="material-symbols-outlined" aria-hidden="true">arrow_back</span></button>
+</header>
+<div class="body">
+<div class="repo-warning"><span class="material-symbols-outlined" aria-hidden="true">info</span><div>Install a public Git repository directly. The repository is cloned and built locally; only install code you trust.</div></div>
+<div class="field">
+<label>Repository URL</label>
+<input class="mono" id="repoUrl" placeholder="https://github.com/owner/integration-repository"/>
+<div class="hint">Public HTTP(S) Git URL or GitHub owner/repository shorthand.</div>
+</div>
+<div class="field">
+<label>Git ref</label>
+<input class="mono" id="repoRef" value="latest" placeholder="latest, tag, branch, or commit"/>
+<div class="hint">Use <span class="mono">latest</span> for the repository's default branch, or enter a tag, branch, or commit SHA.</div>
+</div>
+<div class="field">
+<label>Integration port</label>
+<input class="mono" id="repoPort" placeholder="auto" inputmode="numeric"/>
+<div class="hint">Leave blank to assign the next free integration port.</div>
+</div>
+<details class="repo-advanced">
+<summary>Advanced repository options</summary>
+<div class="repo-advanced-body">
+<div class="field">
+<label>Integration name</label>
+<input id="repoName" placeholder="Detected from driver.json or repository name"/>
+</div>
+<div class="field">
+<label>Integration ID</label>
+<input class="mono" id="repoIntegrationId" placeholder="generated automatically"/>
+<div class="hint">Stable internal ID. Reusing the same ID creates another instance of that integration.</div>
+</div>
+<div class="field">
+<label>Driver ID</label>
+<input class="mono" id="repoDriverId" placeholder="detected from driver.json"/>
+</div>
+<div class="field">
+<label>Source subdirectory</label>
+<input class="mono" id="repoSourceSubdir" placeholder="integration/source"/>
+<div class="hint">Optional build context for repositories containing multiple projects.</div>
+</div>
+<div class="field">
+<label>Dockerfile path</label>
+<input class="mono" id="repoDockerfile" placeholder="Dockerfile or docker/Dockerfile"/>
+<div class="hint">Relative to the selected source subdirectory. Leave blank for automatic detection.</div>
+</div>
+<div class="field">
+<label>Python entrypoint</label>
+<input class="mono" id="repoPythonEntrypoint" placeholder="driver.py"/>
+<div class="hint">Only needed when automatic Python entrypoint detection is incorrect.</div>
+</div>
+</div>
+</details>
+<div class="field">
+<label>Environment variables</label>
+<div id="repoEnvList"></div>
+<button class="btn btn-line btn-sm" onclick="addRepoEnvRow()">+ Add variable</button>
+<div class="hint">Extra variables passed to the integration container.</div>
+</div>
+</div>
+<div class="foot">
+<button class="btn btn-line" onclick="closeModal('repoBack')">Cancel</button>
+<button class="btn btn-primary" id="repoSubmit" onclick="submitRepositoryInstall()">Install repository</button>
 </div>
 </div>
 </div><div class="workspace-panel" data-workspace-panel="true" id="jobBack">

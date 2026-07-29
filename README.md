@@ -30,6 +30,7 @@ The installer provides a browser-based interface for managing integration instan
 ## Features
 
 - Browse and search the external integration registry
+- Install integrations directly from public Git repositories outside the registry
 - Install from prebuilt container images or build from source
 - Run supported official Unfolded Circle integrations externally in Docker
 - Run multiple instances of the same integration
@@ -221,6 +222,31 @@ The installer attempts installation in this order:
 3. Use a built-in language-specific builder
 4. Fall back to Nixpacks when available
 
+### Installing outside the registry
+
+The **Browse** page includes **Install from repository** for integrations that are
+not listed in the configured registry. Enter a public HTTP(S) Git repository URL
+or GitHub `owner/repository` shorthand. The installer clones the source and uses
+the same Dockerfile, language detection, and Nixpacks build pipeline as registry
+installs.
+
+Optional repository settings include:
+
+- Git tag, branch, or commit SHA
+- Source subdirectory for monorepos
+- Explicit Dockerfile path
+- Explicit Python entrypoint
+- Integration name, internal integration ID, and driver ID
+- Port and environment variables
+
+When `driver.json` is present, the integration name and driver ID are detected
+automatically. Custom repository metadata is stored with the installed instance,
+so rebuilds, version changes, additional instances, registration, backups, and
+restores do not depend on a registry entry. Repository code runs with the same
+access as any other integration container; only install repositories you trust.
+Credential-bearing repository URLs are rejected and private-repository
+authentication is not stored by the installer.
+
 Persistent configuration is stored below:
 
 ```text
@@ -338,7 +364,8 @@ http://<host-ip>:8900/docs
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | `GET` | `/api/installed` | List installed instances |
-| `POST` | `/api/integrations/{id}/install` | Install an integration |
+| `POST` | `/api/integrations/{id}/install` | Install a registry integration |
+| `POST` | `/api/custom-integrations/install` | Install directly from a public Git repository |
 | `POST` | `/api/integrations/{id}/add-instance` | Add another instance |
 | `POST` | `/api/integrations/{id}/config` | Configure the default instance |
 | `POST` | `/api/integrations/{id}/{start\|stop\|restart}` | Control the default instance |
