@@ -48,7 +48,7 @@ from pydantic import BaseModel
 # Configuration
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.8"
 
 REGISTRY_URL = os.environ.get(
     "UC_REGISTRY_URL",
@@ -731,6 +731,18 @@ OFFICIAL_PROFILE_BY_REPOSITORY = {
     "unfoldedcircle/integration-roon": "integration-roon",
 }
 
+# Some repositories contain more than the UC integration itself. These profiles
+# constrain source builds to the actual integration directory so unrelated
+# daemons, tools, and their dependencies are never copied into the image.
+REPOSITORY_RUNTIME_PROFILES: dict[str, dict[str, Any]] = {
+    "jstnjx/ps5-control-uc": {
+        "source_subdir": "integration/source",
+        "skip_repo_dockerfile": True,
+        "python_image": "python:3.12-slim",
+        "python_entrypoint": "driver.py",
+    },
+}
+
 
 def external_runtime_profile(entry: dict[str, Any] | None) -> dict[str, Any]:
     """Return the standalone-container runtime profile for a registry entry."""
@@ -740,8 +752,11 @@ def external_runtime_profile(entry: dict[str, Any] | None) -> dict[str, Any]:
     repository = re.sub(r"^https?://github\.com/", "", str(entry.get("repository") or "").strip())
     repository = re.sub(r"\.git$", "", repository).rstrip("/").lower()
     profile_id = entry_id if entry_id in OFFICIAL_INTEGRATION_PROFILES else OFFICIAL_PROFILE_BY_REPOSITORY.get(repository, "")
-    profile = dict(OFFICIAL_INTEGRATION_PROFILES.get(profile_id, {}))
-    known_official = bool(profile)
+    repository_profile = dict(REPOSITORY_RUNTIME_PROFILES.get(repository, {}))
+    official_profile = dict(OFFICIAL_INTEGRATION_PROFILES.get(profile_id, {}))
+    profile = repository_profile
+    profile.update(official_profile)
+    known_official = bool(official_profile)
     builtin_env = dict(profile.get("environment") or {})
     supplied = entry.get("external_runtime")
     if isinstance(supplied, dict):
@@ -1429,6 +1444,31 @@ def _pull_image(image: str, job: Job) -> bool:
         return False
 
 
+def _source_build_dir(repo_dir: Path, entry: dict[str, Any], job: Job) -> Path:
+    """Resolve and validate the repository subdirectory used as build context."""
+    profile = external_runtime_profile(entry)
+    configured = str(profile.get("source_subdir") or "").strip().replace("\\", "/")
+    if not configured or configured == ".":
+        return repo_dir
+
+    relative = Path(configured)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise RuntimeError(f"Invalid integration source_subdir: {configured}")
+
+    repo_root = repo_dir.resolve()
+    source_dir = (repo_dir / relative).resolve()
+    try:
+        source_dir.relative_to(repo_root)
+    except ValueError as exc:
+        raise RuntimeError(f"Integration source_subdir escapes the repository: {configured}") from exc
+
+    if not source_dir.is_dir():
+        raise RuntimeError(f"Configured integration source directory does not exist: {configured}")
+
+    job.log(f"Using integration source directory: {configured}")
+    return source_dir
+
+
 def _find_repo_dockerfile(app_dir: Path, entry: dict[str, Any] | None = None) -> str | None:
     """Return a usable repo-relative Dockerfile path, if the project ships one."""
     profile = external_runtime_profile(entry)
@@ -1573,26 +1613,27 @@ def _build_image(entry: dict[str, Any], job: Job, version: str = "latest",
     image_name = re.sub(r"[^a-z0-9_.-]", "-", (image_scope or integration_id).lower())
     tag = f"uc-local/{image_name}:{safe}"
     client = get_docker()
+    source_dir = _source_build_dir(app_dir, entry, job)
     backups: list[tuple[Path, bytes]] = []
     if external_driver_id:
         backups = _patch_driver_metadata(
-            app_dir, external_driver_id, external_name or entry.get("name", integration_id), job
+            source_dir, external_driver_id, external_name or entry.get("name", integration_id), job
         )
 
     try:
-        repo_dockerfile = _find_repo_dockerfile(app_dir, entry)
+        repo_dockerfile = _find_repo_dockerfile(source_dir, entry)
         if repo_dockerfile:
             job.log(f"Using the project's own {repo_dockerfile}. Building {tag} ...")
-            _docker_build(client, app_dir, repo_dockerfile, tag, job)
+            _docker_build(client, source_dir, repo_dockerfile, tag, job)
             job.log(f"Built {tag}")
             return tag, None, "dockerfile"
 
-        stack = detect_stack(app_dir)
-        dockerfile, entrypoint = _prepare_stack_build(app_dir, stack, job, entry)
+        stack = detect_stack(source_dir)
+        dockerfile, entrypoint = _prepare_stack_build(source_dir, stack, job, entry)
         if dockerfile is not None:
             job.log(f"Detected a {stack} project. Building {tag} ...")
             try:
-                _docker_build(client, app_dir, dockerfile, tag, job)
+                _docker_build(client, source_dir, dockerfile, tag, job)
                 job.log(f"Built {tag}")
                 return tag, entrypoint, stack
             except Exception as exc:  # noqa: BLE001
@@ -1603,7 +1644,7 @@ def _build_image(entry: dict[str, Any], job: Job, version: str = "latest",
 
         if _nixpacks_available():
             job.log("Building automatically with Nixpacks ...")
-            _build_with_nixpacks(app_dir, tag, job)
+            _build_with_nixpacks(source_dir, tag, job)
             job.log(f"Built {tag} with Nixpacks")
             return tag, None, "nixpacks"
 
