@@ -222,6 +222,12 @@ function fmtVer(v) {
   if (v.toLowerCase() === 'latest') return 'latest';
   return /^v\d/i.test(v) ? v : 'v' + v;
 }
+function installedVersionLabel(it, upd = {}) {
+  const selected = String((it && it.version) || 'latest');
+  if (selected.toLowerCase() !== 'latest') return fmtVer(selected);
+  const resolved = String((upd && upd.latest_version) || '').trim();
+  return resolved ? 'latest · ' + fmtVer(resolved) : 'latest';
+}
 function fmtBytes(n) {
   if (n == null) return '—';
   const u = ['B','KB','MB','GB','TB']; let i = 0; n = Number(n);
@@ -260,7 +266,7 @@ function detailsHtml(it) {
     ['Health', s.health ? '<span style="color:' + healthColor(s.health) + '">' + esc(s.health) + '</span>' : '—'],
   ].map(([k, v]) => '<div class="tile"><div class="tile-v">' + v + '</div><div class="tile-k">' + k + '</div></div>').join('');
   const meta = [
-    ['Version', esc(fmtVer(it.version))],
+    ['Version', esc(installedVersionLabel(it, UPDATES[it.id] || {}))],
     ['Build', esc((it.source || '—') + (it.stack && it.stack !== 'dockerfile' ? ' · ' + it.stack : ''))],
     ['Driver id', esc(it.driver_id || '—')],
     ['Port', esc(String(it.port))],
@@ -378,7 +384,7 @@ function renderInstalled() {
             '<span>' + statusLed(it.status) + ' <strong>' + esc(it.status) + '</strong>' + (rc ? ' · ' + rc + ' restarts' : '') + '</span>' +
             '<span>health <strong style="color:' + healthColor(health) + '">' + esc(health) + '</strong></span>' +
             '<span>port <strong>' + esc(String(it.port)) + '</strong></span>' +
-            '<span>version <strong>' + esc(fmtVer(it.version || 'latest')) + '</strong></span>' +
+            '<span>version <strong>' + esc(installedVersionLabel(it, upd)) + '</strong></span>' +
             '<span>cpu <strong>' + (st.cpu_pct != null ? esc(String(st.cpu_pct)) + '%' : '—') + '</strong></span>' +
             '<span>memory <strong>' + (st.mem_used != null ? fmtBytes(st.mem_used) : '—') + '</strong></span>' +
             '<span>remote <strong>' + registration + '</strong></span>' +
@@ -1631,7 +1637,7 @@ function renderInstalled(){
       '<span class="menu-wrap"><button class="row-icon-btn register" title="Register on a remote" aria-label="Register '+esc(it.label||it.name)+' on a remote" onclick="toggleRegisterMenu(event,\''+it.id+'\')">+</button><div class="menu register-menu" id="reg-menu-'+it.id+'">'+remoteRegisterMenuHtml(it)+'</div></span></span>'+
       (upd.update_available?'<span class="upd-badge" onclick="openVersion(\''+it.id+'\')">update '+esc(fmtVer(upd.latest_version||''))+'</span>':'')+'</div><div class="integration-row-sub">'+esc(it.id)+(it.driver_id?' · '+esc(it.driver_id):'')+'</div>'+
       '<div class="state-group"><span class="state-pill '+statusTone(it.status)+'">container · '+esc(it.status)+'</span><span class="state-pill '+statusTone(health)+'">health · '+esc(health)+'</span><span class="state-pill '+(regs.length?'good':'warn')+'">remote · '+(regs.length?esc(regs.map(r=>r.remote_name).join(', ')):'unregistered')+'</span><span class="state-pill '+(upd.update_available?'warn':'good')+'">version · '+(upd.update_available?'update available':'current')+'</span></div>'+
-      '<div class="integration-row-meta"><span>port <strong>'+esc(String(it.port))+'</strong></span><span>version <strong>'+esc(fmtVer(it.version||'latest'))+'</strong></span><span>cpu <strong>'+(st.cpu_pct!=null?esc(String(st.cpu_pct))+'%':'—')+'</strong></span><span>memory <strong>'+(st.mem_used!=null?fmtBytes(st.mem_used):'—')+'</strong></span><span>uptime <strong>'+fmtUptime(st.started_at)+'</strong></span></div>'+(looping?'<div class="integration-row-alert">Crash loop detected. Open details to inspect logs and management options.</div>':'')+'</div>'+
+      '<div class="integration-row-meta"><span>port <strong>'+esc(String(it.port))+'</strong></span><span>version <strong>'+esc(installedVersionLabel(it,upd))+'</strong></span><span>cpu <strong>'+(st.cpu_pct!=null?esc(String(st.cpu_pct))+'%':'—')+'</strong></span><span>memory <strong>'+(st.mem_used!=null?fmtBytes(st.mem_used):'—')+'</strong></span><span>uptime <strong>'+fmtUptime(st.started_at)+'</strong></span></div>'+(looping?'<div class="integration-row-alert">Crash loop detected. Open details to inspect logs and management options.</div>':'')+'</div>'+
       '<button class="integration-row-chevron'+(expanded?' open':'')+'" title="'+(expanded?'Hide':'Show')+' details" aria-label="'+(expanded?'Hide':'Show')+' details for '+esc(it.label||it.name)+'" onclick="toggleDetails(\''+it.id+'\')"><span>'+msIcon('chevron_right')+'</span></button></div>'+(expanded?'<div class="details">'+detailsHtml(it)+'</div>':''); box.appendChild(row);
   }); updateBulkBar();
 }

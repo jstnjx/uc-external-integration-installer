@@ -48,7 +48,7 @@ from pydantic import BaseModel
 # Configuration
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "1.0.10"
+APP_VERSION = "1.0.11"
 
 REGISTRY_URL = os.environ.get(
     "UC_REGISTRY_URL",
