@@ -236,6 +236,7 @@ Optional repository settings include:
 - Source subdirectory for monorepos
 - Explicit Dockerfile path
 - Explicit Python entrypoint
+- Optional WebSocket endpoint path such as `/ws`
 - Integration name, internal integration ID, and driver ID
 - Port and environment variables
 
@@ -246,6 +247,21 @@ restores do not depend on a registry entry. Repository code runs with the same
 access as any other integration container; only install repositories you trust.
 Credential-bearing repository URLs are rejected and private-repository
 authentication is not stored by the installer.
+
+
+### External WebSocket endpoints
+
+Most Python integrations accept WebSocket connections at the root URL. Some
+integrations expose a dedicated endpoint instead. The Home Assistant integration,
+for example, listens at `/ws`; the installer now includes this path automatically
+when registering it with a Remote. Custom repository installs can set the same
+value with the **WebSocket path** advanced option. Existing Remote registrations
+with an outdated URL are replaced automatically the next time **Register** is used.
+
+Managed containers have mDNS publishing disabled by default because the installer
+registers them directly through the Remote Core API. This prevents duplicate mDNS
+service-name races during rebuilds while leaving explicit Remote registration as
+the single source of truth.
 
 Persistent configuration is stored below:
 

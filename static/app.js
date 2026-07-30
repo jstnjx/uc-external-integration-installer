@@ -534,7 +534,7 @@ function addRepoEnvRow(k, v) {
   $('repoEnvList').appendChild(row);
 }
 function openRepositoryInstall() {
-  ['repoUrl','repoName','repoIntegrationId','repoDriverId','repoSourceSubdir','repoDockerfile','repoPythonEntrypoint','repoPort'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['repoUrl','repoName','repoIntegrationId','repoDriverId','repoSourceSubdir','repoDockerfile','repoPythonEntrypoint','repoWsPath','repoPort'].forEach(id => { if ($(id)) $(id).value = ''; });
   $('repoRef').value = 'latest';
   $('repoEnvList').innerHTML = '';
   const advanced = document.querySelector('#repoBack .repo-advanced'); if (advanced) advanced.open = false;
@@ -552,7 +552,7 @@ async function submitRepositoryInstall() {
   const optional = {
     name: 'repoName', integration_id: 'repoIntegrationId', driver_id: 'repoDriverId',
     source_subdir: 'repoSourceSubdir', dockerfile: 'repoDockerfile',
-    python_entrypoint: 'repoPythonEntrypoint'
+    python_entrypoint: 'repoPythonEntrypoint', ws_path: 'repoWsPath'
   };
   Object.entries(optional).forEach(([key, id]) => { const value = $(id).value.trim(); if (value) body[key] = value; });
   const port = $('repoPort').value.trim();

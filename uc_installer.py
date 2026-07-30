@@ -48,7 +48,7 @@ from pydantic import BaseModel
 # Configuration
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 
 REGISTRY_URL = os.environ.get(
     "UC_REGISTRY_URL",
@@ -585,11 +585,16 @@ def build_driver_payload(entry: dict[str, Any], rec: dict[str, Any],
     # instance-specific driver_id/name so multiple instances register distinctly
     driver_id = rec.get("driver_id") or entry.get("driver_id") or rec.get("id") or entry.get("id")
     name = rec.get("label") or entry.get("name") or rec.get("name") or driver_id
+    profile = external_runtime_profile(entry)
+    ws_path = str(profile.get("ws_path") or "").strip()
+    if ws_path and not ws_path.startswith("/"):
+        ws_path = "/" + ws_path
+    ws_path = ws_path.rstrip("/") if ws_path not in ("", "/") else ""
     payload: dict[str, Any] = {
         "driver_id": driver_id,
         "name": {"en": name},
         "version": rec.get("version") or entry.get("version") or "1.0.0",
-        "driver_url": f"ws://{advertise_ip}:{port}",
+        "driver_url": f"ws://{advertise_ip}:{port}{ws_path}",
     }
     if entry.get("description"):
         payload["description"] = {"en": entry["description"]}
@@ -691,6 +696,10 @@ OFFICIAL_INTEGRATION_PROFILES: dict[str, dict[str, Any]] = {
         "driver_id": "hass_external",
         "skip_repo_dockerfile": True,
         "patch_driver_metadata": True,
+        # The Rust integration exposes its Integration API only at /ws.
+        # Registering the bare host causes the Remote to request GET / and
+        # receive HTTP 404, which makes setup time out.
+        "ws_path": "/ws",
     },
     "uc-intg-denonavr": {
         "driver_id": "denonavr_external",
@@ -872,6 +881,29 @@ def owner_repo(repo: str) -> tuple[str, str]:
     if len(parts) < 2:
         return "", ""
     return parts[0], re.sub(r"\.git$", "", parts[1])
+
+
+def normalize_ws_path(value: str | None) -> str:
+    """Validate an optional WebSocket endpoint path used in Remote registration."""
+    path = str(value or "").strip()
+    if not path or path == "/":
+        return ""
+    # Reject complete URLs before adding a leading slash. Otherwise a value such
+    # as ``https://host/ws`` would become ``/https://host/ws`` and look like a
+    # syntactically valid path to urlsplit().
+    original = urllib.parse.urlsplit(path)
+    if original.scheme or original.netloc or path.startswith("//"):
+        raise HTTPException(400, "WebSocket path must be a URL path, not a complete URL")
+    if not path.startswith("/"):
+        path = "/" + path
+    parsed = urllib.parse.urlsplit(path)
+    if parsed.query or parsed.fragment:
+        raise HTTPException(400, "WebSocket path must not contain a query or fragment")
+    if "\\" in path or ".." in Path(path).parts:
+        raise HTTPException(400, "WebSocket path contains unsupported traversal segments")
+    if len(path) > 256 or any(ord(ch) < 32 for ch in path):
+        raise HTTPException(400, "WebSocket path is invalid")
+    return path.rstrip("/") or ""
 
 
 def normalize_repository_url(repository: str) -> str:
@@ -1085,7 +1117,10 @@ def base_environment(port: int, entrypoint: str | None,
         "UC_CONFIG_HOME": "/config",
         "UC_INTEGRATION_INTERFACE": "0.0.0.0",
         "UC_INTEGRATION_HTTP_PORT": str(port),
-        "UC_DISABLE_MDNS_PUBLISH": "false",
+        # Managed integrations are registered explicitly through the Remote Core API.
+        # Disabling mDNS avoids duplicate-service races during rebuilds, which can
+        # make ucapi-based drivers exit and restart several times before stabilizing.
+        "UC_DISABLE_MDNS_PUBLISH": "true",
         "PYTHONUNBUFFERED": "1",
     }
     profile_env = external_runtime_profile(entry).get("environment") or {}
@@ -2042,23 +2077,61 @@ def _startup_logs(container) -> str:
         return ""
 
 
-def _verify_container_started(container, job: Job, timeout: float = 6.0) -> None:
-    """Fail an install when the new container immediately exits or restart-loops."""
+def _tcp_port_accepting(port: int) -> bool:
+    """Return True once the integration has opened its host-network TCP port."""
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.35):
+            return True
+    except OSError:
+        return False
+
+
+def _verify_container_started(
+    container, job: Job, port: int, timeout: float = 18.0, stable_for: float = 3.0
+) -> None:
+    """Fail only when a container exits or keeps restart-looping.
+
+    Docker's ``RestartCount`` is historical. A driver can restart a few times
+    during initialization and then remain healthy; treating any count above one
+    as a permanent failure produced false negatives such as
+    ``status=running, restarts=4``. Stability is now measured by an unchanged
+    restart count plus a listening TCP socket.
+    """
     deadline = time.time() + timeout
-    running_since: float | None = None
+    stable_since: float | None = None
     last_status = "created"
+    last_restart_count: int | None = None
     restart_count = 0
+
     while time.time() < deadline:
         container.reload()
+        now = time.time()
         last_status = str(container.status or "unknown")
         restart_count = int(container.attrs.get("RestartCount", 0) or 0)
+
+        if last_restart_count is not None and restart_count != last_restart_count:
+            job.log(
+                f"Container restarted during startup ({last_restart_count} -> {restart_count}); "
+                "waiting for it to stabilize ..."
+            )
+            stable_since = None
+
         if last_status == "running":
-            running_since = running_since or time.time()
-            if time.time() - running_since >= 2.0 and restart_count <= 1:
-                job.log("Container startup check passed")
+            if stable_since is None:
+                stable_since = now
+            if now - stable_since >= stable_for and _tcp_port_accepting(port):
+                if restart_count:
+                    job.log(
+                        f"Container startup check passed after {restart_count} transient restart"
+                        f"{'s' if restart_count != 1 else ''}"
+                    )
+                else:
+                    job.log("Container startup check passed")
                 return
         else:
-            running_since = None
+            stable_since = None
+
+        last_restart_count = restart_count
         time.sleep(0.4)
 
     container.reload()
@@ -2068,29 +2141,32 @@ def _verify_container_started(container, job: Job, timeout: float = 6.0) -> None
     exit_code = state.get("ExitCode")
     state_error = str(state.get("Error") or "").strip()
     oom_killed = bool(state.get("OOMKilled", False))
-    if last_status == "running" and restart_count <= 1:
-        job.log("Container startup check passed")
-        return
 
     logs = _startup_logs(container)
     if logs:
         job.log("Container startup failed. Last container output:")
         for line in logs.splitlines()[-80:]:
             job.log(f"  {line}")
-    # Keep the failed container so its full stderr remains available after the
-    # background install job has ended. A later install/rebuild removes the old
-    # container before creating the replacement.
     container_name = str(getattr(container, "name", "") or getattr(container, "id", "unknown"))
     job.log(f"Failed container preserved for diagnostics: {container_name}")
     job.log(f"Inspect it with: docker logs --tail 200 {container_name}")
     details = [f"status={last_status}", f"restarts={restart_count}"]
-    if exit_code is not None:
+    # State.ExitCode is zero while a container is currently running and therefore
+    # says nothing about the preceding failed attempts. Only report it for a
+    # stopped container.
+    if last_status != "running" and exit_code is not None:
         details.append(f"exit_code={exit_code}")
+    elif last_status == "running" and not _tcp_port_accepting(port):
+        details.append(f"port_{port}=not_listening")
     if oom_killed:
         details.append("oom_killed=true")
     if state_error:
         details.append(f"docker_error={state_error}")
-    raise RuntimeError(f"container did not remain running ({', '.join(details)})")
+    if last_status == "running":
+        reason = "container did not become ready"
+    else:
+        reason = "container did not remain running"
+    raise RuntimeError(f"{reason} ({', '.join(details)})")
 
 
 def _run_container(
@@ -2145,7 +2221,7 @@ def _run_container(
         },
         **run_kwargs,
     )
-    _verify_container_started(container, job)
+    _verify_container_started(container, job, port)
 
     prev = load_state()["integrations"].get(instance_id, {})
     record_integration({
@@ -2552,6 +2628,7 @@ class CustomRepositoryInstallBody(BaseModel):
     source_subdir: str | None = None
     dockerfile: str | None = None
     python_entrypoint: str | None = None
+    ws_path: str | None = None
     port: int | None = None
     env: dict[str, str] = {}
 
@@ -2822,6 +2899,7 @@ def api_custom_repository_install(body: CustomRepositoryInstallBody) -> dict[str
     source_subdir = clean_repo_relative_path(body.source_subdir, "Source subdirectory")
     dockerfile = clean_repo_relative_path(body.dockerfile, "Dockerfile path")
     python_entrypoint = clean_repo_relative_path(body.python_entrypoint, "Python entrypoint")
+    ws_path = normalize_ws_path(body.ws_path)
 
     requested_id = str(body.integration_id or "").strip().lower()
     if requested_id:
@@ -2861,13 +2939,15 @@ def api_custom_repository_install(body: CustomRepositoryInstallBody) -> dict[str
         runtime["dockerfile"] = dockerfile
     if python_entrypoint:
         runtime["python_entrypoint"] = python_entrypoint
+    if ws_path:
+        runtime["ws_path"] = ws_path
 
     previous_entry = installed_entry(integration_id)
     if previous_entry:
         previous_runtime = previous_entry.get("external_runtime")
         if not isinstance(previous_runtime, dict):
             previous_runtime = {"force_source_build": True}
-        if any((source_subdir, dockerfile, python_entrypoint)) and runtime != previous_runtime:
+        if any((source_subdir, dockerfile, python_entrypoint, ws_path)) and runtime != previous_runtime:
             raise HTTPException(409, "This integration ID already uses different repository build options; choose another integration ID")
         if body.name and name != str(previous_entry.get("name") or ""):
             raise HTTPException(409, "This integration ID already uses a different integration name")
@@ -3350,16 +3430,24 @@ def _driver_url_port(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _driver_is_ours(d: dict[str, Any], rec: dict[str, Any]) -> bool:
-    """True only if this remote driver is OUR external instance — not the remote's
-    own built-in (LOCAL) or uploaded (CUSTOM) driver that shares the driver_id."""
+def _driver_is_ours(
+    d: dict[str, Any], rec: dict[str, Any], expected_url: str | None = None
+) -> bool:
+    """Identify the external registration belonging to an installed instance.
+
+    When the expected URL is known, compare the full URL rather than only the
+    port. This deliberately distinguishes ``ws://host:8008`` from
+    ``ws://host:8008/ws`` so stale Home Assistant registrations are not shown
+    as healthy after upgrading the installer.
+    """
     if not isinstance(d, dict) or d.get("driver_id") != rec.get("driver_id"):
         return False
-    url = d.get("driver_url") or ""
+    url = str(d.get("driver_url") or "")
+    if url and expected_url:
+        return url == expected_url
     recport = str(rec.get("port") or "")
     if url:
-        # our registration set driver_url = ws://<host>:<our-port>; require an exact
-        # port match so a CUSTOM driver uploaded onto the remote isn't mistaken for ours
+        # Fallback used only when the caller cannot determine the advertised URL.
         return bool(recport) and _driver_url_port(url) == recport
     # no url in the listing → only trust an explicitly EXTERNAL type (never CUSTOM/LOCAL)
     return (d.get("driver_type") or "").upper() == "EXTERNAL"
@@ -3373,8 +3461,15 @@ def api_registrations() -> dict[str, list[dict[str, str]]]:
     result: dict[str, list[dict[str, str]]] = {iid: [] for iid in state}
     for rid, remote in remotes.items():
         drivers = [d for d in _remote_drivers(remote) if isinstance(d, dict)]
+        advertise = remote.get("advertise_ip") or detect_host_ip(remote["host"])
         for iid, rec in state.items():
-            if any(_driver_is_ours(d, rec) for d in drivers):
+            expected_url = None
+            if advertise:
+                entry = resolve_integration_entry(rec.get("integration_id", iid)) or entry_from_record(rec)
+                expected_url = build_driver_payload(
+                    entry, rec, advertise, int(rec.get("port") or 0)
+                )["driver_url"]
+            if any(_driver_is_ours(d, rec, expected_url) for d in drivers):
                 result[iid].append({"remote_id": rid, "remote_name": remote.get("name", rid)})
     return result
 
@@ -3501,6 +3596,63 @@ def api_remotes_register(rid: str, body: RegisterBody) -> dict[str, Any]:
             400, "Could not determine this host's IP — set an advertise IP on the remote"
         )
     payload = build_driver_payload(entry, rec, advertise, port)
+
+    # A registration may already exist with the same driver ID but an obsolete
+    # endpoint, for example the old Home Assistant root URL instead of /ws. A
+    # plain POST returns 409 and leaves that unusable URL untouched, so replace
+    # stale EXTERNAL registrations before creating the corrected one.
+    existing_driver: dict[str, Any] | None = None
+    try:
+        existing_driver = next(
+            (
+                d for d in remote_all_drivers(remote, timeout=10.0)
+                if isinstance(d, dict) and d.get("driver_id") == payload["driver_id"]
+            ),
+            None,
+        )
+    except Exception:  # noqa: BLE001
+        existing_driver = None
+
+    replaced_stale = False
+    if existing_driver is not None:
+        existing_url = str(existing_driver.get("driver_url") or "")
+        existing_type = str(existing_driver.get("driver_type") or "").upper()
+        if existing_url == payload["driver_url"]:
+            state = existing_driver.get("driver_state") or existing_driver.get("state")
+            with _remote_drivers_lock:
+                _remote_drivers_cache.pop(rid, None)
+            return {
+                "ok": True,
+                "driver_id": payload["driver_id"],
+                "driver_url": payload["driver_url"],
+                "confirmed": True,
+                "driver_state": state,
+                "remote_status": 409,
+                "already_registered": True,
+                "replaced_stale": False,
+            }
+        if not existing_url and existing_type not in ("EXTERNAL", ""):
+            raise HTTPException(
+                409,
+                f"Driver ID {payload['driver_id']} is already used by a {existing_type} driver",
+            )
+        try:
+            delete_response = remote_request(
+                remote, "DELETE", f"/intg/drivers/{payload['driver_id']}", timeout=15.0
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(502, f"Could not replace stale Remote registration: {exc}")
+        if delete_response.status_code not in (200, 202, 204, 404):
+            raise HTTPException(
+                502,
+                f"Could not replace stale Remote registration: "
+                f"Remote returned {delete_response.status_code}: {(delete_response.text or '')[:300]}",
+            )
+        replaced_stale = True
+        with _remote_drivers_lock:
+            _remote_drivers_cache.pop(rid, None)
+        time.sleep(0.5)
+
     post_status: int | None = None
     post_text = ""
     post_error: str | None = None
@@ -3515,23 +3667,25 @@ def api_remotes_register(rid: str, body: RegisterBody) -> dict[str, Any]:
         _remote_drivers_cache.pop(rid, None)
 
     # The remote's POST status is unreliable — it can return 500 yet still register
-    # the driver. Verify by polling and treat a confirmed-present driver as success.
+    # the driver. Verify the full endpoint by polling, not only the driver ID.
     confirmed, state = False, None
     try:
         for _ in range(6):
             time.sleep(1.0)
             for d in remote_all_drivers(remote):
-                if isinstance(d, dict) and d.get("driver_id") == payload["driver_id"]:
+                if not isinstance(d, dict) or d.get("driver_id") != payload["driver_id"]:
+                    continue
+                state = d.get("driver_state") or d.get("state")
+                if str(d.get("driver_url") or "") == payload["driver_url"]:
                     confirmed = True
-                    state = d.get("driver_state") or d.get("state")
-                    break
+                break
             if confirmed and state in ("CONNECTED", "IDLE", None):
                 break
     except Exception:  # noqa: BLE001
         pass
 
-    # 409 = already registered, which for our purposes is "it's there".
-    succeeded = confirmed or post_status in (200, 201, 204, 409)
+    # A 409 is only successful when polling confirms the exact expected URL.
+    succeeded = confirmed or post_status in (200, 201, 202, 204)
     if not succeeded:
         if post_error:
             raise HTTPException(502, f"Could not reach remote: {post_error}")
@@ -3539,11 +3693,23 @@ def api_remotes_register(rid: str, body: RegisterBody) -> dict[str, Any]:
             raise HTTPException(401, "Authentication failed — check the PIN or API key")
         raise HTTPException(502, f"Remote returned {post_status}: {post_text}")
 
-    record_event("register", body.integration_id,
-                 f"registered {payload['driver_id']} on {remote.get('name', rid)}"
-                 + (f" ({state})" if state else ""))
-    return {"ok": True, "driver_id": payload["driver_id"], "driver_url": payload["driver_url"],
-            "confirmed": confirmed, "driver_state": state, "remote_status": post_status}
+    record_event(
+        "register",
+        body.integration_id,
+        f"registered {payload['driver_id']} on {remote.get('name', rid)}"
+        + (" after replacing a stale URL" if replaced_stale else "")
+        + (f" ({state})" if state else ""),
+    )
+    return {
+        "ok": True,
+        "driver_id": payload["driver_id"],
+        "driver_url": payload["driver_url"],
+        "confirmed": confirmed,
+        "driver_state": state,
+        "remote_status": post_status,
+        "already_registered": False,
+        "replaced_stale": replaced_stale,
+    }
 
 
 @app.delete("/api/remotes/{rid}/drivers/{driver_id}", dependencies=[Depends(require_token)])
@@ -3790,7 +3956,16 @@ def api_registration_preflight(rid: str, instance_id: str) -> dict[str, Any]:
     same_id = next((d for d in drivers if d.get("driver_id") == payload["driver_id"]), None)
     same_url = next((d for d in drivers if d.get("driver_url") == payload["driver_url"]), None)
     if same_id:
-        issues.append({"code": "driver_id_exists", "severity": "warning", "message": "Driver ID is already registered", "driver": same_id})
+        same_id_url = str(same_id.get("driver_url") or "")
+        if same_id_url and same_id_url != payload["driver_url"]:
+            issues.append({
+                "code": "driver_url_stale",
+                "severity": "warning",
+                "message": "Driver ID is registered with a different URL; it will be replaced",
+                "driver": same_id,
+            })
+        else:
+            issues.append({"code": "driver_id_exists", "severity": "warning", "message": "Driver ID is already registered", "driver": same_id})
     if same_url and not same_id:
         issues.append({"code": "driver_url_exists", "severity": "warning", "message": "The same driver URL is already registered", "driver": same_url})
     return {"ok": reachable and not any(i["severity"] == "error" for i in issues), "reachable": reachable,
